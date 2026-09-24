@@ -73,6 +73,7 @@ export function Comments({
     );
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy || !body.trim()) return;
     const from = parseTime(start),
       to = range ? parseTime(end) : null;
     if (
@@ -192,6 +193,7 @@ export function Comments({
           ref={input}
           disabled={busy}
           aria-label="Your comment"
+          aria-describedby="comment-shortcuts"
           placeholder={
             kind === 'keep'
               ? 'What do you like about this moment?'
@@ -210,12 +212,20 @@ export function Comments({
             setSaved(false);
           }}
           onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            if (
+              e.key === 'Enter' &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing &&
+              e.nativeEvent.keyCode !== 229
+            ) {
               e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
+              if (!e.repeat && !busy && body.trim()) e.currentTarget.form?.requestSubmit();
             }
           }}
         />
+        <p className="comment-shortcuts" id="comment-shortcuts">
+          Enter to post · Shift+Enter for a new line
+        </p>
         <div className="time-fields">
           <Clock3 size={14} />
           <input

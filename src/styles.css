@@ -814,6 +814,11 @@ textarea {
 .composer textarea::placeholder {
   color: #9ba2ae;
 }
+.comment-shortcuts {
+  margin: 5px 0 0;
+  color: #737e90;
+  font-size: 10px;
+}
 .time-fields {
   display: flex;
   align-items: center;

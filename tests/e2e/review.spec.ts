@@ -176,3 +176,48 @@ test('section browsing shows original time and exports source-linked feedback', 
   expect(md).toContain('Original recording: 01:16.50');
   expect(md).toContain('00:01.00');
 });
+
+test('Enter posts a comment, Shift+Enter adds a line, and composition or held keys do not post', async ({
+  page,
+  request,
+}) => {
+  const library = await (await request.get('/api/library')).json();
+  const cut = library
+    .find((p: { name: string }) => p.name === 'Browser test project')
+    .assets.find((a: { title: string }) => a.title === 'Cut one');
+  await page.goto('/?cut=' + cut.id);
+  const input = page.getByRole('textbox', { name: 'Your comment' });
+  let posts = 0;
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith(`/assets/${cut.id}/comments`)) posts++;
+  });
+  await input.press('Enter');
+  await expect(input).toHaveValue('');
+  expect(posts).toBe(0);
+  await input.fill('First line.');
+  await input.press('Shift+Enter');
+  await input.pressSequentially('Second line.');
+  await expect(input).toHaveValue('First line.\nSecond line.');
+  expect(posts).toBe(0);
+  await input.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
+  await input.dispatchEvent('keydown', { key: 'Enter', keyCode: 229 });
+  await input.dispatchEvent('keydown', { key: 'Enter', repeat: true });
+  await expect(input).toHaveValue('First line.\nSecond line.');
+  expect(posts).toBe(0);
+  await input.press('Enter');
+  await expect(input).toHaveValue('');
+  await expect(
+    page.getByRole('article').getByText('First line. Second line.', { exact: true }),
+  ).toBeVisible();
+  const comments = await (await request.get(`/api/assets/${cut.id}/comments`)).json();
+  expect(comments).toHaveLength(1);
+  expect(comments[0].body).toBe('First line.\nSecond line.');
+  expect(posts).toBe(1);
+  await input.fill('The previous shortcut still works.');
+  await input.press('Control+Enter');
+  await expect(input).toHaveValue('');
+  await expect(
+    page.getByRole('article').getByText('The previous shortcut still works.', { exact: true }),
+  ).toBeVisible();
+  expect(posts).toBe(2);
+});

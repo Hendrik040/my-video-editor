@@ -474,8 +474,10 @@ export default function App() {
               <dd>Move one frame</dd>
               <dt>C</dt>
               <dd>Pause and start a comment</dd>
-              <dt>⌘ / Ctrl + Enter</dt>
+              <dt>Enter</dt>
               <dd>Post your comment</dd>
+              <dt>Shift + Enter</dt>
+              <dd>Add a new line</dd>
             </dl>
             <p>
               <b>Keep this</b> marks what should stay. <b>Change</b> flags what needs another pass.

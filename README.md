@@ -24,7 +24,7 @@ For development, `npm run dev` serves the API and Vite together on port 4317. Re
 - Click a note’s timestamp or timeline marker to jump back. Reply, edit, resolve/reopen, or delete notes.
 - Use **Review status** to mark a cut approved or request changes.
 - **Export feedback** downloads Markdown with cut names, original video paths, timecodes, replies, and resolution states.
-- The profile control changes the name on future comments. Cmd/Ctrl + Enter posts a comment. Unposted drafts survive switching cuts in this browser.
+- The profile control changes the name on future comments. Enter posts a comment; Shift + Enter adds a new line. Cmd/Ctrl + Enter also posts. Unposted drafts survive switching cuts in this browser.
 
 ## Add another project or edit
 
