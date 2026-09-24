@@ -28,6 +28,8 @@ export default function App() {
     [time, setTime] = useState(0);
   const [anchor, setAnchor] = useState<{ time: number; token: number } | null>(null),
     [seekTarget, setSeekTarget] = useState<{ time: number; token: number } | null>(null);
+  const [search, setSearch] = useState('');
+  const [recordingFilter, setRecordingFilter] = useState('all');
   const activeId = useRef(assetId);
   activeId.current = assetId;
   const project =
@@ -37,7 +39,19 @@ export default function App() {
   const asset =
     project?.assets.find((a) => a.id === assetId) ||
     project?.assets.find((a) => /waterfront/i.test(a.title)) ||
-    project?.assets.at(-1);
+    (project?.assets.some((a) => a.sourcePath) ? project.assets[0] : project?.assets.at(-1));
+  const isRecordings = project?.assets.some((a) => a.sourcePath) || false;
+  const visibleAssets = (project?.assets || []).filter(
+    (a) =>
+      `${a.title} ${a.description}`.toLowerCase().includes(search.toLowerCase()) &&
+      (recordingFilter === 'all' ||
+        (recordingFilter === 'keep' ? (a.keepCount || 0) > 0 : a.commentCount === 0)),
+  );
+  useEffect(() => {
+    setSearch('');
+    setRecordingFilter('all');
+  }, [project?.id]);
+  const recordingIndex = project?.assets.findIndex((a) => a.id === asset?.id) ?? -1;
   activeId.current = asset?.id || '';
   async function loadLibrary() {
     const data = await api<Project[]>('/library');
@@ -97,6 +111,7 @@ export default function App() {
     url.searchParams.set('cut', a.id);
     url.searchParams.delete('t');
     history.pushState({}, '', url);
+    if (a.sourcePath) window.scrollTo({ top: 0, behavior: 'instant' });
   }
   async function refresh() {
     const id = asset?.id;
@@ -266,6 +281,7 @@ export default function App() {
                 <span>
                   <Monitor size={13} />
                   {asset.width} × {asset.height}
+                  {asset.sourcePath ? ' preview' : ''}
                   <span className="small-divider" />
                   {asset.fps.toFixed(2)} fps
                 </span>
@@ -274,15 +290,73 @@ export default function App() {
                   <span className="small-divider" />C to comment
                 </span>
               </div>
+              {asset.sourcePath && project && (
+                <div className="recording-navigation">
+                  <button
+                    disabled={recordingIndex <= 0}
+                    onClick={() => selectAsset(project.assets[recordingIndex - 1])}
+                  >
+                    Previous recording
+                  </button>
+                  <span>
+                    {recordingIndex + 1} of {project.assets.length}
+                  </span>
+                  <button
+                    disabled={recordingIndex >= project.assets.length - 1}
+                    onClick={() => selectAsset(project.assets[recordingIndex + 1])}
+                  >
+                    Next recording
+                  </button>
+                </div>
+              )}
+              {asset.sourcePath && (
+                <div className="source-links">
+                  <span>Full recording · original audio · original timecodes</span>
+                  <a href={`/api/assets/${asset.id}/source`}>Download original MP4</a>
+                  {asset.cameraProxyPath && (
+                    <a href={`/api/assets/${asset.id}/source?format=camera`}>Download camera LRF</a>
+                  )}
+                </div>
+              )}
               <section className="versions">
                 <div className="versions-heading">
                   <h2>
-                    All cuts <span>{project?.assets.length}</span>
+                    {isRecordings ? 'All recordings' : 'All cuts'}{' '}
+                    <span>{project?.assets.length}</span>
                   </h2>
-                  <span>Choose a cut to review</span>
+                  <span>
+                    {isRecordings ? 'Flag good moments with Keep this' : 'Choose a cut to review'}
+                  </span>
                 </div>
-                <div className="cut-strip" role="list" aria-label="Available cuts">
-                  {project?.assets.map((a) => (
+                {isRecordings && (
+                  <div className="library-controls">
+                    <input
+                      type="search"
+                      aria-label="Find a recording"
+                      placeholder="Find a take, filename or date…"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                    <select
+                      aria-label="Filter recordings"
+                      value={recordingFilter}
+                      onChange={(e) => setRecordingFilter(e.target.value)}
+                    >
+                      <option value="all">All recordings</option>
+                      <option value="keep">With keep flags</option>
+                      <option value="unreviewed">No feedback yet</option>
+                    </select>
+                    <span>
+                      {visibleAssets.length} of {project?.assets.length}
+                    </span>
+                  </div>
+                )}
+                <div
+                  className={`cut-strip ${isRecordings ? 'library-grid' : ''}`}
+                  role="list"
+                  aria-label={isRecordings ? 'Available recordings' : 'Available cuts'}
+                >
+                  {visibleAssets.map((a) => (
                     <div role="listitem" key={a.id}>
                       <button
                         className={`cut-card ${a.id === asset.id ? 'selected' : ''}`}
@@ -291,7 +365,9 @@ export default function App() {
                       >
                         <div className="cut-thumbnail">
                           <img src={`/api/assets/${a.id}/thumbnail`} alt="" loading="lazy" />
-                          <span className="cut-duration">{timecode(a.duration)}</span>
+                          <span className="cut-duration">
+                            {timecode(a.duration, a.duration < 1)}
+                          </span>
                           {a.id === asset.id && (
                             <span className="viewing">
                               <Check size={12} />
@@ -302,16 +378,21 @@ export default function App() {
                         <b>{a.title}</b>
                         <span className="cut-meta">
                           <i className={a.status} />
-                          {a.openCount
-                            ? `${a.openCount} open ${a.openCount === 1 ? 'note' : 'notes'}`
-                            : a.status === 'approved'
-                              ? 'Approved'
-                              : 'Ready for review'}
+                          {a.sourcePath && a.keepCount
+                            ? `${a.keepCount} keep ${a.keepCount === 1 ? 'flag' : 'flags'}`
+                            : a.openCount
+                              ? `${a.openCount} open ${a.openCount === 1 ? 'note' : 'notes'}`
+                              : a.status === 'approved'
+                                ? 'Approved'
+                                : 'Ready for review'}
                         </span>
                       </button>
                     </div>
                   ))}
                 </div>
+                {isRecordings && !visibleAssets.length && (
+                  <p className="no-recordings">No recordings match this search or filter.</p>
+                )}
               </section>
             </main>
             <Comments

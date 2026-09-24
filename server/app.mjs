@@ -41,15 +41,13 @@ export function createApp(store) {
   app.get('/api/health', (_, res) => res.json({ app: 'cutroom', ok: true }));
   app.get('/api/library', (_, res) => res.json(store.library()));
   app.post('/api/projects', (req, res) =>
-    res
-      .status(201)
-      .json(
-        store.addProject({
-          name: required(req.body.name, 'Project name', 120),
-          description:
-            typeof req.body.description === 'string' ? req.body.description.slice(0, 1000) : '',
-        }),
-      ),
+    res.status(201).json(
+      store.addProject({
+        name: required(req.body.name, 'Project name', 120),
+        description:
+          typeof req.body.description === 'string' ? req.body.description.slice(0, 1000) : '',
+      }),
+    ),
   );
   const assetFor = (id) => store.asset(id) || fail('Video not found.', 404);
   app.get('/api/assets/:id/comments', (req, res) => {
@@ -60,14 +58,23 @@ export function createApp(store) {
     const a = assetFor(req.params.id);
     res.sendFile(a.path, (err) => {
       if (err && !res.headersSent)
+        res.status(err.status === 416 ? 416 : 404).json({
+          error:
+            err.status === 416
+              ? 'Requested range is outside the video.'
+              : 'The video has moved. Add the file again from its new location.',
+        });
+    });
+  });
+  app.get('/api/assets/:id/source', (req, res) => {
+    const a = assetFor(req.params.id);
+    const path = req.query.format === 'camera' ? a.cameraProxyPath : a.sourcePath;
+    if (!path) fail('No camera source is linked to this video.', 404);
+    res.download(path, (err) => {
+      if (err && !res.headersSent)
         res
-          .status(err.status === 416 ? 416 : 404)
-          .json({
-            error:
-              err.status === 416
-                ? 'Requested range is outside the video.'
-                : 'The video has moved. Add the file again from its new location.',
-          });
+          .status(404)
+          .json({ error: 'The original file is no longer available at its linked path.' });
     });
   });
   app.get('/api/assets/:id/thumbnail', async (req, res) => {
@@ -102,19 +109,17 @@ export function createApp(store) {
     )
       fail('The range must end after its start and within the video.');
     if (!kinds.includes(b.kind)) fail('Choose note, keep or change.');
-    res
-      .status(201)
-      .json(
-        store.addComment({
-          assetId: asset.id,
-          parentId: parent?.id,
-          author: required(b.author, 'Your name', 80),
-          body: required(b.body, 'Comment'),
-          time,
-          endTime,
-          kind: b.kind,
-        }),
-      );
+    res.status(201).json(
+      store.addComment({
+        assetId: asset.id,
+        parentId: parent?.id,
+        author: required(b.author, 'Your name', 80),
+        body: required(b.body, 'Comment'),
+        time,
+        endTime,
+        kind: b.kind,
+      }),
+    );
   });
   app.patch('/api/comments/:id', (req, res) => {
     const c = store.comment(req.params.id) || fail('Comment not found.', 404);
@@ -217,11 +222,9 @@ export function createApp(store) {
     if (res.headersSent) return next(err);
     const status = err.status || (err instanceof multer.MulterError ? 400 : 500);
     if (status === 500) console.error(err);
-    res
-      .status(status)
-      .json({
-        error: status === 500 ? 'Could not complete this action. Please try again.' : err.message,
-      });
+    res.status(status).json({
+      error: status === 500 ? 'Could not complete this action. Please try again.' : err.message,
+    });
   });
   return app;
 }

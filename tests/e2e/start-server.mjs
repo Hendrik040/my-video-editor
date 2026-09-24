@@ -43,6 +43,27 @@ for (const title of ['Cut one', 'Cut two'])
     s.addAsset({ ...m, projectId: p.id, title, description: 'Isolated browser test' }),
     dir,
   );
+const raw = s.addProject({ name: 'Raw camera test' });
+s.db.prepare('UPDATE projects SET createdAt=? WHERE id=?').run('2000-01-01T00:00:00Z', raw.id);
+for (let i = 1; i <= 13; i++) {
+  const a = s.addAsset({
+    ...m,
+    projectId: raw.id,
+    title: `Raw take ${String(i).padStart(2, '0')}`,
+    description: 'Full camera recording',
+    sourcePath: fixture,
+    cameraProxyPath: fixture,
+  });
+  await thumbnail(a, dir);
+  if (i === 12)
+    s.addComment({
+      assetId: a.id,
+      author: 'Reviewer',
+      body: 'Keep this good moment.',
+      time: 1,
+      kind: 'keep',
+    });
+}
 s.close();
 process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
 await import('../../server/index.mjs');

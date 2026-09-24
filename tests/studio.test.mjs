@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { request as httpRequest } from 'node:http';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -40,6 +41,11 @@ test('reviews persist through reopening, snapshot and Markdown retain ranges and
     s.updateComment(c.id, { body: c.body, resolved: true });
     s.setStatus(a.id, 'approved');
     s.close();
+    const legacy = new DatabaseSync(join(dir, 'studio.sqlite'));
+    legacy.exec(
+      'ALTER TABLE assets DROP COLUMN sourcePath; ALTER TABLE assets DROP COLUMN cameraProxyPath;',
+    );
+    legacy.close();
     s = createStore(dir);
     assert.equal(s.comments(a.id).length, 2);
     assert.equal(s.comments(a.id)[0].resolved, true);
@@ -66,6 +72,8 @@ test('API validates feedback, isolates cuts, persists mutations, exports and str
       projectId: p.id,
       title: 'Cut A',
       path: file,
+      sourcePath: file,
+      cameraProxyPath: file,
       duration: 60,
       width: 1920,
       height: 1080,
@@ -150,6 +158,12 @@ test('API validates feedback, isolates cuts, persists mutations, exports and str
     assert.match(md, /Will do/);
     assert.equal((await req(`/assets/${a.id}`, 'PATCH', { status: 'approved' })).status, 200);
     assert.equal(store.asset(a.id).status, 'approved');
+    const source = await req(`/assets/${a.id}/source`);
+    assert.equal(source.status, 200);
+    assert.match(source.headers.get('content-disposition'), /attachment/);
+    assert.equal(await source.text(), '0123456789abcdef');
+    assert.equal((await req(`/assets/${b.id}/source`)).status, 404);
+    assert.match(md, /Original recording \(same timecodes\)/);
     const bytes = await req(`/assets/${a.id}/video`, 'GET', undefined, { Range: 'bytes=4-8' });
     assert.equal(bytes.status, 206);
     assert.equal(bytes.headers.get('content-range'), 'bytes 4-8/16');

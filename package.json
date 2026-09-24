@@ -15,7 +15,8 @@
     "import": "node scripts/import.mjs",
     "feedback": "node scripts/feedback.mjs",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "import:dji": "node scripts/import-dji.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",

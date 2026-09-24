@@ -9,6 +9,9 @@ export type Asset = {
   height: number;
   fps: number;
   status: 'review' | 'changes' | 'approved';
+  sourcePath?: string | null;
+  cameraProxyPath?: string | null;
+  keepCount?: number;
   commentCount: number;
   openCount: number;
   createdAt: string;

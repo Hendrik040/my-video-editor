@@ -91,6 +91,9 @@ export function Comments({
         method: 'POST',
         body: JSON.stringify({ author, body, kind, time: from, endTime: to }),
       });
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {}
       setBody('');
       setRange(false);
       setEnd('');
@@ -187,6 +190,7 @@ export function Comments({
         </div>
         <textarea
           ref={input}
+          disabled={busy}
           aria-label="Your comment"
           placeholder={
             kind === 'keep'

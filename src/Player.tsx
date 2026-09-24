@@ -216,7 +216,7 @@ export function Player({
             </button>
             <span className="timecode">
               <b>{timecode(time, true)}</b>
-              <span> / {timecode(duration)}</span>
+              <span> / {timecode(duration, duration < 1)}</span>
             </span>
           </div>
           <div className="playback-options">

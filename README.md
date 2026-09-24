@@ -66,3 +66,13 @@ npm run test:e2e # isolated browser workflow; creates its own test database and 
 ```
 
 Browser tests use the locally installed Google Chrome channel; change the Playwright configuration if needed. The project uses React/Vite, Express, and Node’s built-in SQLite module. API reference: [Node SQLite](https://nodejs.org/api/sqlite.html), [Express](https://expressjs.com/en/5x/api/).
+
+## Raw DJI recordings
+
+```sh
+npm run import:dji -- --project "Raw Footage Analysis" --directory "/absolute/path/DJI_001"
+```
+
+Pairs each 4K HEVC MP4 with its matching H.264 LRF camera preview. The browser copy combines the camera preview picture with the original MP4 audio by stream copying; it does not trim, retime, grade or re-encode either stream. Pairs must match start time and duration. Each recording gets one review entry, with both original formats linked and source paths included in feedback exports. Original media remain untouched. Rerunning the import skips existing source paths.
+
+Raw recording projects use a searchable thumbnail grid. **With keep flags** shows recordings with Keep this comments; **No feedback yet** helps you work through the remaining takes. Use a time range to flag the exact portion you want to keep. Review copies use the source recording clock; ordinary edited videos still use the edit's output clock.

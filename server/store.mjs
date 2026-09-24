@@ -12,13 +12,22 @@ export function createStore(directory) {
     CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, projectId TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', path TEXT NOT NULL, duration REAL NOT NULL, width INTEGER, height INTEGER, fps REAL, status TEXT NOT NULL DEFAULT 'review', createdAt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS comments (id TEXT PRIMARY KEY, assetId TEXT NOT NULL REFERENCES assets(id), parentId TEXT REFERENCES comments(id) ON DELETE CASCADE, author TEXT NOT NULL, body TEXT NOT NULL, time REAL NOT NULL, endTime REAL, kind TEXT NOT NULL DEFAULT 'note', resolved INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS comments_asset ON comments(assetId, time);`);
+  const columns = new Set(
+    db
+      .prepare('PRAGMA table_info(assets)')
+      .all()
+      .map((c) => c.name),
+  );
+  for (const name of ['sourcePath', 'cameraProxyPath']) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE assets ADD COLUMN ${name} TEXT`);
+  }
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const get = (sql, ...args) => db.prepare(sql).get(...args);
   const library = () =>
     all('SELECT * FROM projects ORDER BY createdAt DESC').map((p) => ({
       ...p,
       assets: all(
-        `SELECT assets.*, (SELECT COUNT(*) FROM comments WHERE assetId=assets.id AND parentId IS NULL) AS commentCount, (SELECT COUNT(*) FROM comments WHERE assetId=assets.id AND parentId IS NULL AND resolved=0) AS openCount FROM assets WHERE projectId=? ORDER BY createdAt ASC, rowid ASC`,
+        `SELECT assets.*, (SELECT COUNT(*) FROM comments WHERE assetId=assets.id AND parentId IS NULL) AS commentCount, (SELECT COUNT(*) FROM comments WHERE assetId=assets.id AND parentId IS NULL AND resolved=0) AS openCount, (SELECT COUNT(*) FROM comments WHERE assetId=assets.id AND parentId IS NULL AND kind='keep') AS keepCount FROM assets WHERE projectId=? ORDER BY createdAt ASC, rowid ASC`,
         p.id,
       ),
     }));
@@ -36,13 +45,21 @@ export function createStore(directory) {
         assets: p.assets.map((a) => ({ ...a, comments: comments(a.id) })),
       })),
     };
-    writeFileSync(join(dir, 'feedback.json.tmp'), JSON.stringify(payload, null, 2));
-    renameSync(join(dir, 'feedback.json.tmp'), join(dir, 'feedback.json'));
+    const temporary = join(dir, `feedback-${randomUUID()}.tmp`);
+    writeFileSync(temporary, JSON.stringify(payload, null, 2));
+    renameSync(temporary, join(dir, 'feedback.json'));
   };
   const mutate = (fn) => {
-    const result = fn();
-    snapshot();
-    return result;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = fn();
+      snapshot();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   };
   return {
     db,
@@ -72,7 +89,9 @@ export function createStore(directory) {
           createdAt: new Date().toISOString(),
           status: 'review',
         };
-        db.prepare('INSERT INTO assets VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
+        db.prepare(
+          'INSERT INTO assets (id,projectId,title,description,path,duration,width,height,fps,status,createdAt,sourcePath,cameraProxyPath) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ).run(
           asset.id,
           asset.projectId,
           asset.title,
@@ -84,6 +103,8 @@ export function createStore(directory) {
           asset.fps,
           asset.status,
           asset.createdAt,
+          asset.sourcePath ?? null,
+          asset.cameraProxyPath ?? null,
         );
         return asset;
       }),
@@ -133,7 +154,7 @@ export function feedbackMarkdown(store, projectId) {
   const lines = [
     '# Cutroom review feedback',
     '',
-    `Exported ${new Date().toISOString()}. Timecodes refer to the rendered edit, not camera originals.`,
+    `Exported ${new Date().toISOString()}. Timecodes refer to the reviewed video. Full-length camera previews share the original recording clock; edited cuts use their own output clock.`,
     '',
   ];
   for (const p of projects) {
@@ -145,6 +166,12 @@ export function feedbackMarkdown(store, projectId) {
         `Video: ${a.path}`,
         '',
       );
+      if (a.sourcePath)
+        lines.push(
+          `Original recording (same timecodes): ${a.sourcePath}`,
+          `Camera preview file: ${a.cameraProxyPath || 'Not supplied'}`,
+          '',
+        );
       const cs = store.comments(a.id),
         parents = cs.filter((c) => !c.parentId);
       if (!parents.length) lines.push('No feedback yet.', '');
