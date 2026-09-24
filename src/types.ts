@@ -11,6 +11,8 @@ export type Asset = {
   status: 'review' | 'changes' | 'approved';
   sourcePath?: string | null;
   cameraProxyPath?: string | null;
+  sourceIn?: number | null;
+  sourceOut?: number | null;
   keepCount?: number;
   commentCount: number;
   openCount: number;

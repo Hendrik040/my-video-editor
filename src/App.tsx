@@ -38,9 +38,11 @@ export default function App() {
     projects[0];
   const asset =
     project?.assets.find((a) => a.id === assetId) ||
-    project?.assets.find((a) => /waterfront/i.test(a.title)) ||
-    (project?.assets.some((a) => a.sourcePath) ? project.assets[0] : project?.assets.at(-1));
+    (project?.assets.some((a) => a.sourcePath)
+      ? project.assets[0]
+      : project?.assets.find((a) => /waterfront/i.test(a.title)) || project?.assets.at(-1));
   const isRecordings = project?.assets.some((a) => a.sourcePath) || false;
+  const isSections = project?.assets.some((a) => a.sourceIn != null) || false;
   const visibleAssets = (project?.assets || []).filter(
     (a) =>
       `${a.title} ${a.description}`.toLowerCase().includes(search.toLowerCase()) &&
@@ -296,7 +298,7 @@ export default function App() {
                     disabled={recordingIndex <= 0}
                     onClick={() => selectAsset(project.assets[recordingIndex - 1])}
                   >
-                    Previous recording
+                    Previous {isSections ? 'snippet' : 'recording'}
                   </button>
                   <span>
                     {recordingIndex + 1} of {project.assets.length}
@@ -305,13 +307,17 @@ export default function App() {
                     disabled={recordingIndex >= project.assets.length - 1}
                     onClick={() => selectAsset(project.assets[recordingIndex + 1])}
                   >
-                    Next recording
+                    Next {isSections ? 'snippet' : 'recording'}
                   </button>
                 </div>
               )}
               {asset.sourcePath && (
                 <div className="source-links">
-                  <span>Full recording · original audio · original timecodes</span>
+                  <span>
+                    {asset.sourceIn == null
+                      ? 'Full recording · original audio · original timecodes'
+                      : `Section ${timecode(asset.sourceIn, true)}–${timecode(asset.sourceOut!, true)} · Original time ${timecode(asset.sourceIn + time, true)}`}
+                  </span>
                   <a href={`/api/assets/${asset.id}/source`}>Download original MP4</a>
                   {asset.cameraProxyPath && (
                     <a href={`/api/assets/${asset.id}/source?format=camera`}>Download camera LRF</a>
@@ -321,7 +327,11 @@ export default function App() {
               <section className="versions">
                 <div className="versions-heading">
                   <h2>
-                    {isRecordings ? 'All recordings' : 'All cuts'}{' '}
+                    {isSections
+                      ? 'All section snippets'
+                      : isRecordings
+                        ? 'All recordings'
+                        : 'All cuts'}{' '}
                     <span>{project?.assets.length}</span>
                   </h2>
                   <span>
@@ -333,7 +343,11 @@ export default function App() {
                     <input
                       type="search"
                       aria-label="Find a recording"
-                      placeholder="Find a take, filename or date…"
+                      placeholder={
+                        isSections
+                          ? 'Find a take or recommended pick…'
+                          : 'Find a take, filename or date…'
+                      }
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                     />
@@ -342,7 +356,7 @@ export default function App() {
                       value={recordingFilter}
                       onChange={(e) => setRecordingFilter(e.target.value)}
                     >
-                      <option value="all">All recordings</option>
+                      <option value="all">{isSections ? 'All snippets' : 'All recordings'}</option>
                       <option value="keep">With keep flags</option>
                       <option value="unreviewed">No feedback yet</option>
                     </select>

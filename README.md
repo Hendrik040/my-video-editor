@@ -76,3 +76,9 @@ npm run import:dji -- --project "Raw Footage Analysis" --directory "/absolute/pa
 Pairs each 4K HEVC MP4 with its matching H.264 LRF camera preview. The browser copy combines the camera preview picture with the original MP4 audio by stream copying; it does not trim, retime, grade or re-encode either stream. Pairs must match start time and duration. Each recording gets one review entry, with both original formats linked and source paths included in feedback exports. Original media remain untouched. Rerunning the import skips existing source paths.
 
 Raw recording projects use a searchable thumbnail grid. **With keep flags** shows recordings with Keep this comments; **No feedback yet** helps you work through the remaining takes. Use a time range to flag the exact portion you want to keep. Review copies use the source recording clock; ordinary edited videos still use the edit's output clock.
+
+## Section reviews
+
+Use separate projects to compare topic snippets. A recommended pick is an editorial suggestion in its title; it does not change the review status or approve it on your behalf. **Keep this**, comments and time ranges work on each snippet independently.
+
+For a single continuous excerpt, an importer can supply `sourcePath`, `sourceIn` and `sourceOut` to `createStore().addAsset()`. The range uses half-open original-recording seconds. The player shows the original time alongside the snippet, and Markdown feedback exports both clocks. JSON retains the source range and comments on the snippet clock: `originalTime = comment.time + asset.sourceIn`. Use a separate edit map for an assembly containing multiple source intervals.

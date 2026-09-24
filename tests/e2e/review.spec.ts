@@ -149,3 +149,30 @@ test('raw library search, keep filters, original sources and source-clock feedba
     page.getByRole('list', { name: 'Available recordings' }).getByRole('listitem'),
   ).toHaveCount(12);
 });
+
+test('section browsing shows original time and exports source-linked feedback', async ({
+  page,
+  request,
+}) => {
+  const library = await (await request.get('/api/library')).json();
+  const project = library.find((p: { name: string }) => p.name === 'Section test');
+  await page.goto('/?cut=' + project.assets[0].id);
+  await expect(
+    page.getByRole('heading', { name: 'All section snippets 2', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Section 01:15.50–01:19.50 · Original time 01:15.50')).toBeVisible();
+  await page.getByRole('button', { name: 'Next snippet', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Alternative — Take 17', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Previous snippet', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Your comment' }).fill('Use this opening.');
+  await page.getByRole('textbox', { name: 'Comment start time' }).fill('00:01.00');
+  await page.getByRole('button', { name: 'Post comment', exact: true }).click();
+  await expect(
+    page.getByRole('article').getByText('Use this opening.', { exact: true }),
+  ).toBeVisible();
+  const md = await (await request.get('/api/projects/' + project.id + '/feedback')).text();
+  expect(md).toContain('Original recording: 01:16.50');
+  expect(md).toContain('00:01.00');
+});

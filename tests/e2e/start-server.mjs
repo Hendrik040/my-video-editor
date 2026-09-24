@@ -64,6 +64,21 @@ for (let i = 1; i <= 13; i++) {
       kind: 'keep',
     });
 }
+const sections = s.addProject({ name: 'Section test' });
+s.db.prepare('UPDATE projects SET createdAt=? WHERE id=?').run('2000-01-01T00:00:00Z', sections.id);
+for (const title of ['Recommended — Take 03', 'Alternative — Take 17']) {
+  await thumbnail(
+    s.addAsset({
+      ...m,
+      projectId: sections.id,
+      title,
+      sourcePath: fixture,
+      sourceIn: 75.5,
+      sourceOut: 79.5,
+    }),
+    dir,
+  );
+}
 s.close();
 process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
 await import('../../server/index.mjs');

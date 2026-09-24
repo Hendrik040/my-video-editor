@@ -8,6 +8,50 @@ import { join } from 'node:path';
 import { createStore, feedbackMarkdown } from '../server/store.mjs';
 import { createApp } from '../server/app.mjs';
 
+test('section comments retain clip time and map ranges back to the original recording', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cutroom-sections-'));
+  let s = createStore(dir);
+  try {
+    const p = s.addProject({ name: 'Section Cuts — Intro' });
+    const input = {
+      projectId: p.id,
+      title: 'Recommended — Take 03',
+      path: join(dir, 'section.mp4'),
+      duration: 20,
+      width: 1280,
+      height: 720,
+      fps: 30,
+      sourcePath: join(dir, 'original.mp4'),
+      sourceIn: 75.5,
+      sourceOut: 95.5,
+    };
+    assert.throws(() => s.addAsset({ ...input, sourceOut: null }), /valid source range/);
+    assert.equal(s.library()[0].assets.length, 0);
+    const a = s.addAsset(input);
+    s.addComment({
+      assetId: a.id,
+      author: 'Reviewer',
+      body: 'Keep this phrase.',
+      time: 2.25,
+      endTime: 5.5,
+      kind: 'keep',
+    });
+    s.close();
+    s = createStore(dir);
+    assert.equal(s.asset(a.id).sourceIn, 75.5);
+    const md = feedbackMarkdown(s, p.id);
+    assert.match(md, /00:02.25–00:05.50/);
+    assert.match(md, /Original recording: 01:17.75–01:21.00/);
+    assert.doesNotMatch(md, /Original recording \(same timecodes\)/);
+    const snapshot = JSON.parse(readFileSync(join(dir, 'feedback.json')));
+    assert.equal(snapshot.projects[0].assets[0].sourceIn, 75.5);
+    assert.equal(snapshot.projects[0].assets[0].comments[0].time, 2.25);
+  } finally {
+    s.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('reviews persist through reopening, snapshot and Markdown retain ranges and replies', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cutroom-store-'));
   let s = createStore(dir);

@@ -150,6 +150,10 @@ textarea {
   text-align: left;
   margin-bottom: 5px;
 }
+.project-rail nav {
+  min-height: 0;
+  overflow-y: auto;
+}
 .project-link span {
   flex: 1;
   line-height: 1.45;
@@ -172,6 +176,7 @@ textarea {
   padding: 13px 10px;
 }
 .rail-bottom {
+  flex-shrink: 0;
   margin-top: auto;
   padding: 20px 8px 0;
   color: #9199a6;

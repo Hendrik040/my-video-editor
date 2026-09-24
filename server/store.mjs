@@ -21,6 +21,9 @@ export function createStore(directory) {
   for (const name of ['sourcePath', 'cameraProxyPath']) {
     if (!columns.has(name)) db.exec(`ALTER TABLE assets ADD COLUMN ${name} TEXT`);
   }
+  for (const name of ['sourceIn', 'sourceOut']) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE assets ADD COLUMN ${name} REAL`);
+  }
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const get = (sql, ...args) => db.prepare(sql).get(...args);
   const library = () =>
@@ -83,6 +86,16 @@ export function createStore(directory) {
       }),
     addAsset: (a) =>
       mutate(() => {
+        if (a.sourceIn != null || a.sourceOut != null) {
+          if (
+            !a.sourcePath ||
+            !Number.isFinite(a.sourceIn) ||
+            !Number.isFinite(a.sourceOut) ||
+            a.sourceIn < 0 ||
+            a.sourceOut <= a.sourceIn
+          )
+            throw new Error('A section needs an original recording and a valid source range.');
+        }
         const asset = {
           ...a,
           id: randomUUID(),
@@ -90,7 +103,7 @@ export function createStore(directory) {
           status: 'review',
         };
         db.prepare(
-          'INSERT INTO assets (id,projectId,title,description,path,duration,width,height,fps,status,createdAt,sourcePath,cameraProxyPath) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO assets (id,projectId,title,description,path,duration,width,height,fps,status,createdAt,sourcePath,cameraProxyPath,sourceIn,sourceOut) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         ).run(
           asset.id,
           asset.projectId,
@@ -105,6 +118,8 @@ export function createStore(directory) {
           asset.createdAt,
           asset.sourcePath ?? null,
           asset.cameraProxyPath ?? null,
+          asset.sourceIn ?? null,
+          asset.sourceOut ?? null,
         );
         return asset;
       }),
@@ -168,7 +183,12 @@ export function feedbackMarkdown(store, projectId) {
       );
       if (a.sourcePath)
         lines.push(
-          `Original recording (same timecodes): ${a.sourcePath}`,
+          `Original recording${a.sourceIn == null ? ' (same timecodes)' : ''}: ${a.sourcePath}`,
+          ...(a.sourceIn == null
+            ? []
+            : [
+                `Source range: ${timecode(a.sourceIn)}–${timecode(a.sourceOut)}. Original time = section time + ${a.sourceIn} seconds.`,
+              ]),
           `Camera preview file: ${a.cameraProxyPath || 'Not supplied'}`,
           '',
         );
@@ -179,6 +199,11 @@ export function feedbackMarkdown(store, projectId) {
         lines.push(
           `- [${c.resolved ? 'x' : ' '}] **${timecode(c.time)}${c.endTime == null ? '' : `–${timecode(c.endTime)}`} · ${c.kind} · ${c.author}**`,
           `  ${c.body.replaceAll('\n', '\n  ')}`,
+          ...(a.sourceIn == null
+            ? []
+            : [
+                `  Original recording: ${timecode(a.sourceIn + c.time)}${c.endTime == null ? '' : `–${timecode(a.sourceIn + c.endTime)}`}`,
+              ]),
         );
         for (const reply of cs.filter((r) => r.parentId === c.id))
           lines.push(`  - ${reply.author}: ${reply.body.replaceAll('\n', '\n    ')}`);
