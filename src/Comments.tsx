@@ -11,7 +11,7 @@ import {
   Clock3,
   Send,
 } from 'lucide-react';
-import type { Asset, Comment, Kind } from './types';
+import type { Asset, Comment, Drawing, Kind, Reference } from './types';
 import { api, parseTime, timecode } from './types';
 type Props = {
   asset: Asset;
@@ -19,6 +19,10 @@ type Props = {
   author: string;
   time: number;
   anchor: { time: number; token: number } | null;
+  drawingDraft: { time: number; drawings: Drawing[] } | null;
+  onClearDrawing: () => void;
+  onShowComment: (comment: Comment) => void;
+  onSavingChange: (busy: boolean) => void;
   onSeek: (time: number) => void;
   onRefresh: () => Promise<void>;
   onPause: () => void;
@@ -29,7 +33,10 @@ export function Comments({
   author,
   time,
   anchor,
-  onSeek,
+  drawingDraft,
+  onClearDrawing,
+  onShowComment,
+  onSavingChange,
   onRefresh,
   onPause,
 }: Props) {
@@ -46,27 +53,50 @@ export function Comments({
     [kind, setKind] = useState<Kind>(initial.kind || 'note'),
     [start, setStart] = useState(initial.start || '00:00.00'),
     [end, setEnd] = useState(initial.end || ''),
-    [range, setRange] = useState(Boolean(initial.end));
+    [range, setRange] = useState(Boolean(initial.end)),
+    [references, setReferences] = useState<Reference[]>(() =>
+      Array.isArray(initial.references)
+        ? initial.references
+            .filter((reference: Reference) => reference && typeof reference.url === 'string')
+            .slice(0, 5)
+            .map((reference: Reference) => ({
+              url: reference.url,
+              title: typeof reference.title === 'string' ? reference.title : '',
+            }))
+        : [],
+    );
+  const hasDrawing = Boolean(drawingDraft?.drawings.length);
   const [filter, setFilter] = useState('open'),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [saved, setSaved] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  const mounted = useMounted();
   useEffect(() => {
     try {
       localStorage.setItem(
         storageKey,
-        JSON.stringify({ body, kind, start, end: range ? end : '' }),
+        JSON.stringify({ body, kind, start, end: range ? end : '', references }),
       );
     } catch {}
-  }, [body, kind, start, end, range, storageKey]);
+  }, [body, kind, start, end, range, references, storageKey]);
   useEffect(() => {
     if (anchor) {
-      setStart(timecode(anchor.time, true));
-      if (range) setEnd(timecode(Math.min(asset.duration, anchor.time + 5), true));
+      if (!hasDrawing) {
+        setStart(timecode(anchor.time, true));
+        if (range) setEnd(timecode(Math.min(asset.duration, anchor.time + 5), true));
+      }
       input.current?.focus();
     }
   }, [anchor]);
+  useEffect(() => {
+    if (drawingDraft?.drawings.length) {
+      setStart(timecode(drawingDraft.time, true));
+      setRange(false);
+      setEnd('');
+      setSaved(false);
+    }
+  }, [drawingDraft]);
   const parents = comments.filter((c) => !c.parentId),
     visible = parents.filter(
       (c) => filter === 'all' || (filter === 'resolved' ? c.resolved : !c.resolved),
@@ -74,8 +104,12 @@ export function Comments({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy || !body.trim()) return;
-    const from = parseTime(start),
-      to = range ? parseTime(end) : null;
+    const from = hasDrawing && drawingDraft ? drawingDraft.time : parseTime(start),
+      to = range && !hasDrawing ? parseTime(end) : null,
+      referenceAttachments = references.map((reference) => ({
+        url: reference.url.trim(),
+        ...(reference.title?.trim() ? { title: reference.title.trim() } : {}),
+      }));
     if (
       !Number.isFinite(from) ||
       from < 0 ||
@@ -85,25 +119,42 @@ export function Comments({
       setError('Use a time within this video. A range must end after it starts.');
       return;
     }
+    if (referenceAttachments.some((reference) => !isHttpReference(reference.url))) {
+      setError('References need a full http:// or https:// link.');
+      return;
+    }
     setBusy(true);
+    onSavingChange(true);
     setError('');
     try {
       await api(`/assets/${asset.id}/comments`, {
         method: 'POST',
-        body: JSON.stringify({ author, body, kind, time: from, endTime: to }),
+        body: JSON.stringify({
+          author,
+          body,
+          kind,
+          time: from,
+          endTime: to,
+          drawings: drawingDraft?.drawings || [],
+          references: referenceAttachments,
+        }),
       });
       try {
         localStorage.removeItem(storageKey);
       } catch {}
+      onClearDrawing();
+      if (!mounted.current) return;
       setBody('');
       setRange(false);
       setEnd('');
+      setReferences([]);
       setSaved(true);
       await onRefresh();
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      onSavingChange(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -155,7 +206,7 @@ export function Comments({
               comment={c}
               replies={comments.filter((r) => r.parentId === c.id)}
               author={author}
-              onSeek={onSeek}
+              onShowComment={onShowComment}
               onRefresh={onRefresh}
             />
           ))
@@ -205,7 +256,7 @@ export function Comments({
           maxLength={5000}
           onFocus={() => {
             onPause();
-            if (!body && !anchor) setStart(timecode(time, true));
+            if (!body && !anchor && !hasDrawing) setStart(timecode(time, true));
           }}
           onChange={(e) => {
             setBody(e.target.value);
@@ -226,19 +277,34 @@ export function Comments({
         <p className="comment-shortcuts" id="comment-shortcuts">
           Enter to post · Shift+Enter for a new line
         </p>
+        {hasDrawing && drawingDraft && (
+          <div className="drawing-note-hint">
+            <p>Drawing pinned to {timecode(drawingDraft.time)}. Clear it to change the time.</p>
+            <button
+              type="button"
+              className="clear-drawing-button"
+              disabled={busy}
+              onClick={onClearDrawing}
+            >
+              <X size={13} /> Clear drawing
+            </button>
+          </div>
+        )}
         <div className="time-fields">
           <Clock3 size={14} />
           <input
             aria-label="Comment start time"
-            value={start}
+            value={hasDrawing && drawingDraft ? timecode(drawingDraft.time, true) : start}
+            disabled={busy || hasDrawing}
             onChange={(e) => setStart(e.target.value)}
             placeholder="00:00.00"
           />
-          {range && (
+          {range && !hasDrawing && (
             <>
               <span>to</span>
               <input
                 aria-label="Comment end time"
+                disabled={busy}
                 value={end}
                 onChange={(e) => setEnd(e.target.value)}
                 placeholder="00:05.00"
@@ -248,6 +314,7 @@ export function Comments({
           <button
             type="button"
             className="text-button"
+            disabled={busy || hasDrawing}
             onClick={() => {
               setStart(timecode(time, true));
               if (range) setEnd(timecode(Math.min(asset.duration, time + 5), true));
@@ -256,11 +323,85 @@ export function Comments({
             At playhead
           </button>
         </div>
+        <div className="reference-draft">
+          <div className="reference-draft-heading">
+            <span>Reference links</span>
+            <span>{references.length}/5</span>
+          </div>
+          {references.length > 0 && (
+            <div className="reference-draft-list">
+              {references.map((reference, index) => (
+                <div className="reference-draft-row" key={index}>
+                  <div className="reference-draft-fields">
+                    <input
+                      type="url"
+                      aria-label={`Reference ${index + 1} URL`}
+                      placeholder="https://example.com"
+                      value={reference.url}
+                      maxLength={2048}
+                      disabled={busy}
+                      required
+                      onChange={(e) => {
+                        setReferences((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, url: e.target.value } : item,
+                          ),
+                        );
+                        setSaved(false);
+                      }}
+                    />
+                    <input
+                      aria-label={`Reference ${index + 1} title`}
+                      placeholder="Title (optional)"
+                      value={reference.title || ''}
+                      maxLength={160}
+                      disabled={busy}
+                      onChange={(e) => {
+                        setReferences((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, title: e.target.value } : item,
+                          ),
+                        );
+                        setSaved(false);
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="remove-reference-button"
+                    aria-label={`Remove reference ${index + 1}`}
+                    disabled={busy}
+                    onClick={() => {
+                      setReferences((current) =>
+                        current.filter((_, itemIndex) => itemIndex !== index),
+                      );
+                      setSaved(false);
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            className="add-reference-button"
+            disabled={busy || references.length >= 5}
+            onClick={() => {
+              setReferences((current) => [...current, { url: '', title: '' }]);
+              setSaved(false);
+            }}
+          >
+            Add reference
+          </button>
+        </div>
         <div className="composer-bottom">
           <label className="range-check">
             <input
               type="checkbox"
-              checked={range}
+              checked={range && !hasDrawing}
+              disabled={busy || hasDrawing}
               onChange={(e) => {
                 setRange(e.target.checked);
                 if (e.target.checked)
@@ -287,29 +428,31 @@ function CommentCard({
   comment: c,
   replies,
   author,
-  onSeek,
+  onShowComment,
   onRefresh,
 }: {
   comment: Comment;
   replies: Comment[];
   author: string;
-  onSeek: (time: number) => void;
+  onShowComment: (comment: Comment) => void;
   onRefresh: () => Promise<void>;
 }) {
   const [reply, setReply] = useState<string | null>(null),
     [edit, setEdit] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  const mounted = useMounted();
   async function action(fn: () => Promise<unknown>) {
     setBusy(true);
     setError('');
     try {
       await fn();
+      if (!mounted.current) return;
       await onRefresh();
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -338,13 +481,14 @@ function CommentCard({
         </button>
       </div>
       <div className="comment-labels">
-        <button className="timestamp" onClick={() => onSeek(c.time)}>
+        <button className="timestamp" onClick={() => onShowComment(c)}>
           {timecode(c.time)}
           {c.endTime !== null ? ` – ${timecode(c.endTime)}` : ''}
         </button>
         <span className={`kind-tag ${c.kind}`}>
           {c.kind === 'keep' ? 'Keep this' : c.kind === 'change' ? 'Change' : 'Note'}
         </span>
+        {Boolean(c.drawings?.length) && <span className="drawing-tag">Drawing</span>}
       </div>
       {edit === null ? (
         <p className="comment-body">{c.body}</p>
@@ -357,7 +501,7 @@ function CommentCard({
                 method: 'PATCH',
                 body: JSON.stringify({ body: edit }),
               });
-              setEdit(null);
+              if (mounted.current) setEdit(null);
             });
           }}
         >
@@ -376,7 +520,13 @@ function CommentCard({
           </div>
         </form>
       )}
+      <ReferenceLinks references={c.references} />
       <div className="comment-actions">
+        {Boolean(c.drawings?.length) && (
+          <button className="show-drawing-button" onClick={() => onShowComment(c)}>
+            Show drawing
+          </button>
+        )}
         <button onClick={() => setReply(reply === null ? '' : null)}>
           Reply {replies.length || ''}
         </button>
@@ -398,6 +548,7 @@ function CommentCard({
           <div>
             <b>{r.author}</b>
             <p>{r.body}</p>
+            <ReferenceLinks references={r.references} />
           </div>
           <button
             className="text-button"
@@ -428,7 +579,7 @@ function CommentCard({
                   kind: 'note',
                 }),
               });
-              setReply(null);
+              if (mounted.current) setReply(null);
             });
           }}
         >
@@ -454,5 +605,52 @@ function CommentCard({
         </p>
       )}
     </article>
+  );
+}
+
+function isHttpReference(url: string) {
+  if (!/^https?:\/\//i.test(url) || /[\u0000-\u001f\u007f]/.test(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      Boolean(parsed.hostname) &&
+      !parsed.username &&
+      !parsed.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+function useMounted() {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return mounted;
+}
+
+function ReferenceLinks({ references }: { references?: Reference[] }) {
+  const safeReferences = references?.filter((reference) => isHttpReference(reference.url)) || [];
+  if (!safeReferences.length) return null;
+  return (
+    <ul className="comment-references" aria-label="Reference links">
+      {safeReferences.map((reference, index) => (
+        <li key={`${reference.url}-${index}`}>
+          <a
+            className="comment-reference-link"
+            href={reference.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {reference.title || reference.url}
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }

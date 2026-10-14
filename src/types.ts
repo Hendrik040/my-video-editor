@@ -19,6 +19,13 @@ export type Asset = {
   createdAt: string;
 };
 export type Project = { id: string; name: string; description: string; assets: Asset[] };
+export type Drawing = {
+  color: string;
+  width: number;
+  points: { x: number; y: number }[];
+};
+export type DrawingDraft = { time: number; drawings: Drawing[] };
+export type Reference = { url: string; title?: string };
 export type Comment = {
   id: string;
   assetId: string;
@@ -31,6 +38,8 @@ export type Comment = {
   resolved: boolean;
   createdAt: string;
   updatedAt: string;
+  drawings: Drawing[];
+  references: Reference[];
 };
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api' + path, {

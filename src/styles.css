@@ -354,6 +354,70 @@ textarea {
   box-shadow: 0 16px 40px #0000001a;
   background: #1a1c20;
 }
+.drawing-overlay {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+.drawing-overlay.is-drawing {
+  pointer-events: auto;
+  touch-action: none;
+  cursor: crosshair;
+}
+.drawing-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding: 9px 13px;
+  border-top: 1px solid #343942;
+  background: #232730;
+}
+.draw-toggle {
+  padding: 6px 8px;
+  border: 1px solid #4c5666;
+  border-radius: 4px;
+  background: #2e3540;
+  color: #d2d9e5;
+  font-size: 11px;
+}
+.draw-toggle.active {
+  border-color: #95afe4;
+  background: #384b70;
+  color: #fff;
+}
+.drawing-frame {
+  color: #abb4c4;
+  font-size: 10px;
+  margin-right: auto;
+}
+.pen-colors {
+  display: flex;
+  gap: 5px;
+}
+.pen-colors button {
+  width: 26px;
+  height: 26px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: #232730;
+  padding: 4px;
+}
+.pen-colors button::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--pen-color);
+}
+.pen-colors button.selected {
+  border-color: #adbce1;
+}
+.drawing-error {
+  padding: 8px 13px;
+  color: #ffb7ad;
+  font-size: 11px;
+}
 .video-stage {
   background: #080a0c;
   position: relative;
@@ -818,6 +882,106 @@ textarea {
   margin: 5px 0 0;
   color: #737e90;
   font-size: 10px;
+}
+.drawing-note-hint {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 9px 0 0;
+  color: #58667d;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.clear-drawing-button,
+.add-reference-button {
+  padding: 3px 0;
+  color: #4969a6;
+  background: transparent;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.reference-draft {
+  margin: 12px 0 16px;
+}
+.reference-draft-heading {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #6a7585;
+  margin-bottom: 6px;
+}
+.reference-draft-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.reference-draft-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+.reference-draft-fields {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.reference-draft-fields input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  background: #fff;
+  border: 1px solid #d2d8df;
+  border-radius: 4px;
+  color: #323b4a;
+  font-size: 11px;
+}
+.remove-reference-button {
+  padding: 7px;
+  color: #6a7585;
+  background: transparent;
+}
+.comment-references {
+  display: grid;
+  gap: 7px;
+  padding: 0;
+  margin: 10px 0;
+  list-style: none;
+}
+.comment-reference-link {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: #4869a2;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.comment-reference-link svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.drawing-tag,
+.show-drawing-button {
+  font-size: 10px;
+  color: #796432;
+  background: #f5efd9;
+  border: 1px solid #dfd1a5;
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.comment-actions .show-drawing-button {
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: #725e2d;
+  background: #f5efd9;
+  border: 1px solid #dfd1a5;
+  border-radius: 4px;
 }
 .time-fields {
   display: flex;

@@ -9,21 +9,36 @@ import {
   SkipForward,
   MessageSquarePlus,
   Link2,
+  Pencil,
+  Undo2,
+  Trash2,
+  Check,
 } from 'lucide-react';
-import type { Asset, Comment } from './types';
+import type { Asset, Comment, DrawingDraft } from './types';
 import { timecode } from './types';
+import { DrawingOverlay } from './DrawingOverlay';
 export function Player({
   asset,
   comments,
   onComment,
   onTime,
   seekTarget,
+  drawingDraft,
+  onDrawingChange,
+  activeComment,
+  onShowComment,
+  saving,
 }: {
   asset: Asset;
   comments: Comment[];
   onComment: (time: number) => void;
   onTime: (time: number) => void;
   seekTarget: { time: number; token: number } | null;
+  drawingDraft: DrawingDraft | null;
+  onDrawingChange: (draft: DrawingDraft | null) => void;
+  activeComment: Comment | null;
+  onShowComment: (comment: Comment) => void;
+  saving: boolean;
 }) {
   const video = useRef<HTMLVideoElement>(null),
     surface = useRef<HTMLDivElement>(null);
@@ -35,7 +50,19 @@ export function Player({
     [speed, setSpeed] = useState(1),
     [error, setError] = useState(''),
     [copied, setCopied] = useState(false);
+  const [drawing, setDrawing] = useState(false),
+    [penColor, setPenColor] = useState('#f4c95d'),
+    [drawingError, setDrawingError] = useState('');
+  const near = (at: number) => Math.abs(time - at) <= 0.51 / asset.fps;
+  const showDraft = drawingDraft && near(drawingDraft.time) && !playing;
+  const visibleStrokes =
+    !playing && activeComment && near(activeComment.time)
+      ? activeComment.drawings || []
+      : showDraft
+        ? drawingDraft.drawings
+        : [];
   const seek = (target: number) => {
+    setDrawing(false);
     if (video.current) {
       const n = Math.max(0, Math.min(duration, target));
       video.current.currentTime = n;
@@ -44,6 +71,7 @@ export function Player({
     }
   };
   const toggle = () => {
+    setDrawing(false);
     const v = video.current;
     if (v)
       v.paused
@@ -51,13 +79,30 @@ export function Player({
         : v.pause();
   };
   const comment = () => {
+    setDrawing(false);
     video.current?.pause();
     const at = video.current?.currentTime || 0;
     if (document.fullscreenElement) document.exitFullscreen().finally(() => onComment(at));
     else onComment(at);
   };
+  async function startDrawing() {
+    const v = video.current;
+    if (!v || error || saving || v.readyState < 2) return;
+    v.pause();
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+    const at = drawingDraft?.drawings.length ? drawingDraft.time : v.currentTime;
+    seek(at);
+    if (!drawingDraft?.drawings.length) onDrawingChange({ time: at, drawings: [] });
+    onComment(at);
+    setDrawingError('');
+    setDrawing(true);
+  }
+  useEffect(() => {
+    if (!drawingDraft) setDrawing(false);
+  }, [drawingDraft]);
   useEffect(() => {
     if (seekTarget && video.current) {
+      setDrawing(false);
       const v = video.current;
       const go = () => {
         v.currentTime = Math.max(0, Math.min(asset.duration, seekTarget.time));
@@ -135,7 +180,25 @@ export function Player({
           }
           aria-label={asset.title}
         />
-        {!playing && !error && (
+        {(drawing || visibleStrokes.length > 0) && (
+          <DrawingOverlay
+            video={video}
+            asset={asset}
+            drawing={drawing && !saving}
+            strokes={visibleStrokes}
+            color={penColor}
+            onLimit={() =>
+              setDrawingError(
+                'This note has reached its drawing limit. Undo a stroke or clear the drawing to continue.',
+              )
+            }
+            onStroke={(stroke) => {
+              if (!drawingDraft || saving) return;
+              onDrawingChange({ ...drawingDraft, drawings: [...drawingDraft.drawings, stroke] });
+            }}
+          />
+        )}
+        {!playing && !error && !drawing && !visibleStrokes.length && (
           <button className="big-play" onClick={toggle} aria-label="Play video">
             <Play fill="currentColor" size={28} />
           </button>
@@ -154,6 +217,80 @@ export function Player({
           </div>
         )}
       </div>
+      <div className="drawing-tools" aria-label="Frame drawing tools">
+        <button
+          className={`draw-toggle ${drawing ? 'active' : ''}`}
+          aria-pressed={drawing}
+          disabled={!!error || saving}
+          onClick={() => {
+            if (drawing) {
+              setDrawing(false);
+              if (drawingDraft) onComment(drawingDraft.time);
+            } else void startDrawing();
+          }}
+        >
+          {drawing ? <Check size={14} /> : <Pencil size={14} />}
+          {drawing ? 'Done drawing' : 'Draw on frame'}
+        </button>
+        {drawing && (
+          <div className="pen-colors" role="group" aria-label="Pen color">
+            {(
+              [
+                ['#f4c95d', 'Yellow'],
+                ['#ff6b6b', 'Red'],
+                ['#ffffff', 'White'],
+              ] as const
+            ).map(([color, name]) => (
+              <button
+                key={color}
+                className={penColor === color ? 'selected' : ''}
+                style={{ '--pen-color': color } as React.CSSProperties}
+                aria-label={`${name} pen`}
+                aria-pressed={penColor === color}
+                onClick={() => setPenColor(color)}
+              />
+            ))}
+          </div>
+        )}
+        {!!drawingDraft?.drawings.length && (
+          <>
+            <span className="drawing-frame">Pinned to {timecode(drawingDraft.time, true)}</span>
+            <button
+              aria-label="Undo stroke"
+              disabled={saving}
+              title="Undo stroke"
+              className="icon-button"
+              onClick={() => {
+                onDrawingChange({ ...drawingDraft, drawings: drawingDraft.drawings.slice(0, -1) });
+                setDrawingError('');
+              }}
+            >
+              <Undo2 size={15} />
+            </button>
+            <button
+              aria-label="Clear drawing"
+              disabled={saving}
+              title="Clear drawing"
+              className="icon-button"
+              onClick={() => {
+                onDrawingChange(null);
+                setDrawing(false);
+                setDrawingError('');
+              }}
+            >
+              <Trash2 size={15} />
+            </button>
+          </>
+        )}
+        {!drawingDraft?.drawings.length && !drawing && (
+          <span className="drawing-frame">Point out what should change.</span>
+        )}
+      </div>
+      {drawingError && (
+        <p className="drawing-error" role="alert">
+          {drawingError}
+        </p>
+      )}
       <div className="playback">
         <div className="timeline">
           <input
@@ -183,7 +320,7 @@ export function Player({
                   aria-label={`Jump to comment at ${timecode(c.time)}: ${c.body}`}
                   onClick={() => {
                     video.current?.pause();
-                    seek(c.time);
+                    onShowComment(c);
                   }}
                 />
               ))}

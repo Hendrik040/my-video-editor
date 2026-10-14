@@ -15,7 +15,15 @@ import {
 } from 'lucide-react';
 import { Player } from './Player';
 import { Comments } from './Comments';
-import { api, savedName, timecode, type Asset, type Comment, type Project } from './types';
+import {
+  api,
+  savedName,
+  timecode,
+  type Asset,
+  type Comment,
+  type Project,
+  type DrawingDraft,
+} from './types';
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]),
     [projectId, setProjectId] = useState(''),
@@ -30,6 +38,11 @@ export default function App() {
     [seekTarget, setSeekTarget] = useState<{ time: number; token: number } | null>(null);
   const [search, setSearch] = useState('');
   const [recordingFilter, setRecordingFilter] = useState('all');
+  const [drawingDraft, setDrawingDraft] = useState<(DrawingDraft & { assetId: string }) | null>(
+    null,
+  );
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+  const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
   const activeId = useRef(assetId);
   activeId.current = assetId;
   const project =
@@ -70,6 +83,21 @@ export default function App() {
     setComments([]);
     setTime(0);
     setAnchor(null);
+    setSelectedCommentId(null);
+    try {
+      const draft = JSON.parse(localStorage.getItem(`cutroom-drawing-${asset.id}`) || 'null');
+      setDrawingDraft(
+        draft &&
+          Number.isFinite(draft.time) &&
+          draft.time >= 0 &&
+          draft.time <= asset.duration &&
+          Array.isArray(draft.drawings)
+          ? { ...draft, assetId: asset.id }
+          : null,
+      );
+    } catch {
+      setDrawingDraft(null);
+    }
     setError('');
     const controller = new AbortController();
     api<Comment[]>(`/assets/${asset.id}/comments`, { signal: controller.signal })
@@ -105,7 +133,24 @@ export default function App() {
       clearInterval(interval);
     };
   }, [asset?.id]);
-  const capture = useCallback((at: number) => setAnchor({ time: at, token: Date.now() }), []);
+  const capture = useCallback((at: number) => {
+    setSelectedCommentId(null);
+    setAnchor({ time: at, token: Date.now() });
+  }, []);
+  function updateDrawing(draft: DrawingDraft | null) {
+    if (!asset) return;
+    if (activeId.current === asset.id)
+      setDrawingDraft(draft ? { ...draft, assetId: asset.id } : null);
+    try {
+      const key = `cutroom-drawing-${asset.id}`;
+      if (draft?.drawings.length) localStorage.setItem(key, JSON.stringify(draft));
+      else localStorage.removeItem(key);
+    } catch {}
+  }
+  function showComment(comment: Comment) {
+    setSelectedCommentId(comment.id);
+    seek(comment.time);
+  }
   function selectAsset(a: Asset) {
     setAssetId(a.id);
     setProjectId(a.projectId);
@@ -278,6 +323,11 @@ export default function App() {
                 onComment={capture}
                 onTime={setTime}
                 seekTarget={seekTarget}
+                drawingDraft={drawingDraft?.assetId === asset.id ? drawingDraft : null}
+                onDrawingChange={updateDrawing}
+                activeComment={comments.find((c) => c.id === selectedCommentId) || null}
+                onShowComment={showComment}
+                saving={savingAssetId === asset.id}
               />
               <div className="video-footnote">
                 <span>
@@ -419,6 +469,14 @@ export default function App() {
               onSeek={seek}
               onRefresh={refresh}
               onPause={() => document.querySelector('video')?.pause()}
+              drawingDraft={drawingDraft?.assetId === asset.id ? drawingDraft : null}
+              onClearDrawing={() => updateDrawing(null)}
+              onShowComment={showComment}
+              onSavingChange={(busy) =>
+                setSavingAssetId((current) =>
+                  busy ? asset.id : current === asset.id ? null : current,
+                )
+              }
             />
           </div>
         )}

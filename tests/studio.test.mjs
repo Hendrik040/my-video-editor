@@ -8,6 +8,207 @@ import { join } from 'node:path';
 import { createStore, feedbackMarkdown } from '../server/store.mjs';
 import { createApp } from '../server/app.mjs';
 
+const drawings = [
+  {
+    color: '#f4b266',
+    width: 0.004,
+    points: [
+      { x: 0.2, y: 0.3 },
+      { x: 0.8, y: 0.7 },
+    ],
+  },
+];
+const references = [{ url: 'https://example.com/reference#lighting', title: 'Lighting [example]' }];
+
+test('visual feedback migrates legacy notes and retains geometry, links and replies after reopening', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cutroom-visual-store-'));
+  let store = createStore(dir);
+  try {
+    const project = store.addProject({ name: 'Visual review' });
+    const asset = store.addAsset({
+      projectId: project.id,
+      title: 'First cut',
+      path: join(dir, 'preview.mp4'),
+      duration: 60,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+    });
+    const original = store.addComment({
+      assetId: asset.id,
+      author: 'Reviewer',
+      body: 'Keep this older note.',
+      time: 1,
+      endTime: 2,
+      kind: 'keep',
+    });
+    store.close();
+    const legacy = new DatabaseSync(join(dir, 'studio.sqlite'));
+    legacy.exec(
+      'ALTER TABLE comments DROP COLUMN drawings; ALTER TABLE comments DROP COLUMN "references";',
+    );
+    legacy.close();
+    store = createStore(dir);
+    assert.equal(store.comment(original.id).body, original.body);
+    assert.deepEqual(store.comment(original.id).drawings, []);
+    assert.deepEqual(store.comment(original.id).references, []);
+    assert.equal(store.comment(original.id).endTime, 2);
+    const upgradedSnapshot = JSON.parse(readFileSync(join(dir, 'feedback.json')));
+    assert.equal(upgradedSnapshot.schemaVersion, 2);
+    assert.deepEqual(upgradedSnapshot.projects[0].assets[0].comments[0].drawings, []);
+
+    const annotated = store.addComment({
+      assetId: asset.id,
+      author: 'Reviewer',
+      body: 'Match this lighting.',
+      time: 3,
+      kind: 'change',
+      drawings,
+      references,
+    });
+    assert.deepEqual(annotated.drawings, drawings);
+    assert.equal(annotated.resolved, false);
+    store.addComment({
+      assetId: asset.id,
+      parentId: annotated.id,
+      author: 'Editor',
+      body: 'Another reference.',
+      time: 3,
+      kind: 'note',
+      references: [{ url: 'http://example.com/alternative' }],
+    });
+    store.updateComment(annotated.id, { body: 'Match the softer lighting.', resolved: true });
+    store.updateComment(annotated.id, { resolved: false });
+    store.close();
+    store = createStore(dir);
+    const persisted = store.comment(annotated.id);
+    assert.deepEqual(persisted.drawings, drawings);
+    assert.deepEqual(persisted.references, references);
+    assert.equal(persisted.body, 'Match the softer lighting.');
+    assert.equal(persisted.resolved, false);
+    assert.equal(store.comments(asset.id).length, 3);
+    const snapshot = JSON.parse(readFileSync(join(dir, 'feedback.json')));
+    const exportedComment = snapshot.projects[0].assets[0].comments.find(
+      (c) => c.id === annotated.id,
+    );
+    assert.deepEqual(exportedComment.drawings, drawings);
+    assert.deepEqual(exportedComment.references, references);
+    const markdown = feedbackMarkdown(store, project.id);
+    assert.match(markdown, /Drawing geometry at 00:03.00/);
+    assert.ok(markdown.includes(JSON.stringify(drawings)));
+    assert.ok(
+      markdown.includes('[Lighting \\[example\\]](<https://example.com/reference#lighting>)'),
+    );
+    assert.ok(markdown.includes('http://example.com/alternative'));
+
+    store.updateComment(annotated.id, { drawings: [], references: [] });
+    assert.deepEqual(store.comment(annotated.id).drawings, []);
+    assert.deepEqual(store.comment(annotated.id).references, []);
+    assert.equal(store.comment(original.id).body, original.body);
+    store.deleteComment(annotated.id);
+    assert.deepEqual(
+      store.comments(asset.id).map((c) => c.id),
+      [original.id],
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('visual feedback rejects malformed and oversized attachments before altering stored notes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cutroom-visual-validation-'));
+  const store = createStore(dir);
+  try {
+    const project = store.addProject({ name: 'Validation' });
+    const asset = store.addAsset({
+      projectId: project.id,
+      title: 'Cut',
+      path: join(dir, 'preview.mp4'),
+      duration: 60,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+    });
+    const input = {
+      assetId: asset.id,
+      author: 'Reviewer',
+      body: 'Drawing.',
+      time: 3,
+      kind: 'note',
+    };
+    const c = store.addComment({ ...input, drawings, references });
+    const initialSnapshot = readFileSync(join(dir, 'feedback.json'), 'utf8');
+    const invalidDrawings = [
+      null,
+      {},
+      [null],
+      [{ ...drawings[0], color: 'red' }],
+      [{ ...drawings[0], width: '0.004' }],
+      [{ ...drawings[0], width: NaN }],
+      [{ ...drawings[0], width: 0.0009 }],
+      [{ ...drawings[0], width: 0.021 }],
+      [{ ...drawings[0], points: [] }],
+      [{ ...drawings[0], points: [{ x: Infinity, y: 0 }] }],
+      [{ ...drawings[0], points: [{ x: 0, y: -0.1 }] }],
+      [{ ...drawings[0], points: [{ x: 1.1, y: 0 }] }],
+      [{ ...drawings[0], points: [{ x: '0.2', y: 0 }] }],
+      [{ ...drawings[0], points: Array(1501).fill({ x: 0, y: 1 }) }],
+      Array(41).fill(drawings[0]),
+      Array(9).fill({ ...drawings[0], points: Array(1500).fill({ x: 0, y: 1 }) }),
+    ];
+    const invalidReferences = [
+      null,
+      {},
+      [null],
+      Array(6).fill(references[0]),
+      [{ url: 'javascript:alert(1)' }],
+      [{ url: 'data:text/plain,example' }],
+      [{ url: 'file:///tmp/reference.png' }],
+      [{ url: '/reference' }],
+      [{ url: 'https://user:secret@example.com/' }],
+      [{ url: 'https://example.com/\nreference' }],
+      [{ url: 'https://example.com/' + 'a'.repeat(2048) }],
+      [{ url: 'https://example.com/' + 'ü'.repeat(400) }],
+      [{ url: 'https://example.com', title: 'a'.repeat(161) }],
+      [{ url: 'https://example.com', title: 12 }],
+    ];
+    for (const invalid of invalidDrawings) {
+      assert.throws(() => store.addComment({ ...input, drawings: invalid }), { status: 400 });
+      assert.throws(() => store.updateComment(c.id, { drawings: invalid, body: 'Changed.' }), {
+        status: 400,
+      });
+    }
+    for (const invalid of invalidReferences) {
+      assert.throws(() => store.addComment({ ...input, references: invalid }), { status: 400 });
+      assert.throws(() => store.updateComment(c.id, { references: invalid, resolved: true }), {
+        status: 400,
+      });
+    }
+    assert.throws(() => store.addComment({ ...input, drawings, endTime: 4 }), { status: 400 });
+    assert.throws(() => store.addComment({ ...input, drawings, parentId: c.id }), { status: 400 });
+    assert.equal(store.comments(asset.id).length, 1);
+    assert.deepEqual(store.comment(c.id).drawings, drawings);
+    assert.deepEqual(store.comment(c.id).references, references);
+    assert.equal(store.comment(c.id).body, 'Drawing.');
+    assert.equal(store.comment(c.id).resolved, false);
+    assert.equal(readFileSync(join(dir, 'feedback.json'), 'utf8'), initialSnapshot);
+    const boundary = store.addComment({
+      ...input,
+      drawings: [
+        { color: '#ABCDEF', width: 0.001, points: [{ x: 0, y: 1 }] },
+        { color: '#123456', width: 0.02, points: [{ x: 1, y: 0 }] },
+      ],
+      references: [{ url: ' HTTPS://example.com/ref ', title: ' Example ' }],
+    });
+    assert.equal(boundary.drawings[0].color, '#abcdef');
+    assert.deepEqual(boundary.references, [{ url: 'https://example.com/ref', title: 'Example' }]);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('section comments retain clip time and map ranges back to the original recording', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cutroom-sections-'));
   let s = createStore(dir);
@@ -200,6 +401,70 @@ test('API validates feedback, isolates cuts, persists mutations, exports and str
     const md = await (await req(`/projects/${p.id}/feedback`)).text();
     assert.match(md, /00:12.50–00:17.00/);
     assert.match(md, /Will do/);
+    const visualNote = { ...note, endTime: null, drawings, references };
+    assert.equal(
+      (await req(`/assets/${a.id}/comments`, 'POST', { ...visualNote, body: '' })).status,
+      400,
+    );
+    assert.equal(
+      (await req(`/assets/${a.id}/comments`, 'POST', { ...visualNote, endTime: 17 })).status,
+      400,
+    );
+    assert.equal(
+      (await req(`/assets/${a.id}/comments`, 'POST', { ...visualNote, parentId: c.id })).status,
+      400,
+    );
+    assert.equal(
+      (
+        await req(`/assets/${a.id}/comments`, 'POST', {
+          ...visualNote,
+          references: [{ url: 'javascript:alert(1)' }],
+        })
+      ).status,
+      400,
+    );
+    const visualResponse = await req(`/assets/${a.id}/comments`, 'POST', visualNote);
+    assert.equal(visualResponse.status, 201);
+    const visual = await visualResponse.json();
+    assert.deepEqual(visual.drawings, drawings);
+    assert.deepEqual(visual.references, references);
+    const updated = await (
+      await req(`/comments/${visual.id}`, 'PATCH', { body: 'Use this reference.', resolved: true })
+    ).json();
+    assert.deepEqual(updated.drawings, drawings);
+    assert.deepEqual(updated.references, references);
+    assert.equal(updated.resolved, true);
+    const invalidPatch = await req(`/comments/${visual.id}`, 'PATCH', {
+      body: 'Do not save this.',
+      references: [{ url: 'https://user:secret@example.com' }],
+    });
+    assert.equal(invalidPatch.status, 400);
+    assert.equal(store.comment(visual.id).body, 'Use this reference.');
+    const jsonExport = await (await req(`/projects/${p.id}/feedback?format=json`)).json();
+    assert.deepEqual(
+      jsonExport.assets
+        .find((asset) => asset.id === a.id)
+        .comments.find((comment) => comment.id === visual.id).drawings,
+      drawings,
+    );
+    const visualMarkdown = await (await req(`/projects/${p.id}/feedback`)).text();
+    assert.ok(visualMarkdown.includes(JSON.stringify(drawings)));
+    assert.ok(visualMarkdown.includes('https://example.com/reference#lighting'));
+    const maximum = Array(8).fill({ ...drawings[0], points: Array(1500).fill({ x: 0, y: 1 }) });
+    const maximumResponse = await req(`/assets/${a.id}/comments`, 'POST', {
+      ...visualNote,
+      drawings: maximum,
+    });
+    assert.equal(maximumResponse.status, 201);
+    const maximumComment = await maximumResponse.json();
+    assert.equal(maximumComment.drawings.flatMap((stroke) => stroke.points).length, 12000);
+    const cleared = await (
+      await req(`/comments/${visual.id}`, 'PATCH', { drawings: [], references: [] })
+    ).json();
+    assert.deepEqual(cleared.drawings, []);
+    assert.deepEqual(cleared.references, []);
+    await req(`/comments/${visual.id}`, 'DELETE');
+    await req(`/comments/${maximumComment.id}`, 'DELETE');
     assert.equal((await req(`/assets/${a.id}`, 'PATCH', { status: 'approved' })).status, 200);
     assert.equal(store.asset(a.id).status, 'approved');
     const source = await req(`/assets/${a.id}/source`);

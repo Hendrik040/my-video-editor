@@ -37,7 +37,7 @@ export function createApp(store) {
     res.setHeader('X-Frame-Options', 'DENY');
     next();
   });
-  app.use(express.json({ limit: '64kb' }));
+  app.use(express.json({ limit: '1mb' }));
   app.get('/api/health', (_, res) => res.json({ app: 'cutroom', ok: true }));
   app.get('/api/library', (_, res) => res.json(store.library()));
   app.post('/api/projects', (req, res) =>
@@ -118,6 +118,8 @@ export function createApp(store) {
         time,
         endTime,
         kind: b.kind,
+        drawings: b.drawings,
+        references: b.references,
       }),
     );
   });
@@ -128,6 +130,8 @@ export function createApp(store) {
     store.updateComment(c.id, {
       body: req.body.body === undefined ? c.body : required(req.body.body, 'Comment'),
       resolved: req.body.resolved ?? Boolean(c.resolved),
+      ...(req.body.drawings === undefined ? {} : { drawings: req.body.drawings }),
+      ...(req.body.references === undefined ? {} : { references: req.body.references }),
     });
     res.json(store.comment(c.id));
   });
