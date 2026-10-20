@@ -13,6 +13,8 @@ export type Asset = {
   cameraProxyPath?: string | null;
   sourceIn?: number | null;
   sourceOut?: number | null;
+  stackId: string;
+  version: number;
   keepCount?: number;
   commentCount: number;
   openCount: number;
@@ -26,6 +28,7 @@ export type Drawing = {
 };
 export type DrawingDraft = { time: number; drawings: Drawing[] };
 export type Reference = { url: string; title?: string };
+export type ImageAttachment = { name: string; width?: number; height?: number };
 export type Comment = {
   id: string;
   assetId: string;
@@ -40,6 +43,7 @@ export type Comment = {
   updatedAt: string;
   drawings: Drawing[];
   references: Reference[];
+  images: ImageAttachment[];
 };
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api' + path, {

@@ -22,6 +22,7 @@ For development, `npm run dev` serves the API and Vite together on port 4317. Re
 - Press **C** or **Add comment** to pause and pin a note to the playhead.
 - Choose **Draw on frame** to mark the paused picture with a yellow, red, or white pen. Use **Undo stroke** or **Clear drawing**, then **Done drawing** to write and post the note. A drawing pins its note to that exact moment; **Show drawing** returns to the marked frame.
 - Use **Add reference** to attach up to five web links with optional titles. Drawings and reference links stay with their comment after reloading, editing, or resolving it. Unposted drawings and references stay in this browser when you switch cuts.
+- **Paste a screenshot** (Cmd/Ctrl + V) into the comment box to attach it, or use **Attach image**. Up to ten PNG, JPEG, WebP or GIF images per note; they pin to a single frame, show as thumbnails on the posted note, and open full size in a new tab. Attachments live in `data/attachments/` and are included in exported feedback.
 - Choose **Note**, **Keep this**, or **Change**. Enable **Time range** to mark an entire section.
 - Click a note’s timestamp or timeline marker to jump back. Reply, edit, resolve/reopen, or delete notes.
 - Use **Review status** to mark a cut approved or request changes.
@@ -40,6 +41,16 @@ npm run feedback
 ```
 
 Importing the same file path through the CLI is idempotent. Give each new render a new filename so older notes continue to refer to the exact reviewed version. Linked files must remain at their original paths. Uploaded files are managed under `data/media/`.
+
+## Versions
+
+Every cut belongs to a **version stack**, like Frame.io. A fresh cut is a stack of one. To add a revision as a new version, choose **Add as → New version of …** in **Add video**, or press **Add new version** on the version switcher. Stacked versions show as a single card in **All cuts** with a `V2` badge; the **version switcher** above the player lists them newest-on-top so you can step up and down between them. Each version keeps its own comments and review status, so notes always refer to the exact render you were watching.
+
+The import CLI stacks a version with `--version-of <cut id or title>`:
+
+```sh
+npm run import -- --project "Secure update" --file "/absolute/path/render-9.mp4" --title "Graphics animatic · render 9" --version-of "Graphics animatic · render 8"
+```
 
 ## Where feedback lives
 

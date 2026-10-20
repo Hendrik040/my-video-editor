@@ -12,6 +12,9 @@ import {
   HardDrive,
   Check,
   LoaderCircle,
+  Layers,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { Player } from './Player';
 import { Comments } from './Comments';
@@ -43,6 +46,7 @@ export default function App() {
   );
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
   const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
+  const [uploadVersionOf, setUploadVersionOf] = useState('');
   const activeId = useRef(assetId);
   activeId.current = assetId;
   const project =
@@ -66,6 +70,12 @@ export default function App() {
     setSearch('');
     setRecordingFilter('all');
   }, [project?.id]);
+  const stacks = groupStacks(visibleAssets);
+  const stackCount = new Set((project?.assets || []).map((a) => a.stackId || a.id)).size;
+  const currentStackId = asset ? asset.stackId || asset.id : '';
+  const currentStack = (project?.assets || [])
+    .filter((a) => (a.stackId || a.id) === currentStackId)
+    .sort((a, b) => b.version - a.version);
   const recordingIndex = project?.assets.findIndex((a) => a.id === asset?.id) ?? -1;
   activeId.current = asset?.id || '';
   async function loadLibrary() {
@@ -261,7 +271,10 @@ export default function App() {
             )}
             <button
               className="primary upload-button"
-              onClick={() => setModal(project ? 'upload' : 'project')}
+              onClick={() => {
+                setUploadVersionOf('');
+                setModal(project ? 'upload' : 'project');
+              }}
             >
               <Plus size={16} />
               Add video
@@ -293,7 +306,13 @@ export default function App() {
             <p>
               Add a video to review it, pin feedback to a moment, and keep your revisions together.
             </p>
-            <button className="primary" onClick={() => setModal(project ? 'upload' : 'project')}>
+            <button
+              className="primary"
+              onClick={() => {
+                setUploadVersionOf('');
+                setModal(project ? 'upload' : 'project');
+              }}
+            >
               {project ? 'Add a video' : 'Create a project'}
             </button>
           </div>
@@ -316,6 +335,17 @@ export default function App() {
                   <option value="approved">Approved</option>
                 </select>
               </div>
+              {currentStack.length > 1 && (
+                <VersionSwitcher
+                  versions={currentStack}
+                  current={asset}
+                  onSelect={selectAsset}
+                  onAddVersion={() => {
+                    setUploadVersionOf(currentStack[0]?.id || asset.id);
+                    setModal('upload');
+                  }}
+                />
+              )}
               <Player
                 key={asset.id}
                 asset={asset}
@@ -382,7 +412,7 @@ export default function App() {
                       : isRecordings
                         ? 'All recordings'
                         : 'All cuts'}{' '}
-                    <span>{project?.assets.length}</span>
+                    <span>{stackCount}</span>
                   </h2>
                   <span>
                     {isRecordings ? 'Flag good moments with Keep this' : 'Choose a cut to review'}
@@ -420,39 +450,52 @@ export default function App() {
                   role="list"
                   aria-label={isRecordings ? 'Available recordings' : 'Available cuts'}
                 >
-                  {visibleAssets.map((a) => (
-                    <div role="listitem" key={a.id}>
-                      <button
-                        className={`cut-card ${a.id === asset.id ? 'selected' : ''}`}
-                        onClick={() => selectAsset(a)}
-                        aria-pressed={a.id === asset.id}
-                      >
-                        <div className="cut-thumbnail">
-                          <img src={`/api/assets/${a.id}/thumbnail`} alt="" loading="lazy" />
-                          <span className="cut-duration">
-                            {timecode(a.duration, a.duration < 1)}
-                          </span>
-                          {a.id === asset.id && (
-                            <span className="viewing">
-                              <Check size={12} />
-                              Viewing
+                  {stacks.map((stack) => {
+                    const top = stack[stack.length - 1];
+                    const shown = stack.find((v) => v.id === asset.id) || top;
+                    const inStack = stack.some((v) => v.id === asset.id);
+                    const stacked = stack.length > 1;
+                    return (
+                      <div role="listitem" key={top.stackId || top.id}>
+                        <button
+                          className={`cut-card ${inStack ? 'selected' : ''}`}
+                          onClick={() => selectAsset(top)}
+                          aria-pressed={inStack}
+                        >
+                          <div className="cut-thumbnail">
+                            <img src={`/api/assets/${shown.id}/thumbnail`} alt="" loading="lazy" />
+                            <span className="cut-duration">
+                              {timecode(top.duration, top.duration < 1)}
                             </span>
-                          )}
-                        </div>
-                        <b>{a.title}</b>
-                        <span className="cut-meta">
-                          <i className={a.status} />
-                          {a.sourcePath && a.keepCount
-                            ? `${a.keepCount} keep ${a.keepCount === 1 ? 'flag' : 'flags'}`
-                            : a.openCount
-                              ? `${a.openCount} open ${a.openCount === 1 ? 'note' : 'notes'}`
-                              : a.status === 'approved'
-                                ? 'Approved'
-                                : 'Ready for review'}
-                        </span>
-                      </button>
-                    </div>
-                  ))}
+                            {stacked && (
+                              <span className="version-badge">
+                                <Layers size={11} />V{top.version}
+                              </span>
+                            )}
+                            {inStack && (
+                              <span className="viewing">
+                                <Check size={12} />
+                                Viewing
+                              </span>
+                            )}
+                          </div>
+                          <b>{top.title}</b>
+                          <span className="cut-meta">
+                            <i className={top.status} />
+                            {stacked
+                              ? `${stack.length} versions`
+                              : top.sourcePath && top.keepCount
+                                ? `${top.keepCount} keep ${top.keepCount === 1 ? 'flag' : 'flags'}`
+                                : top.openCount
+                                  ? `${top.openCount} open ${top.openCount === 1 ? 'note' : 'notes'}`
+                                  : top.status === 'approved'
+                                    ? 'Approved'
+                                    : 'Ready for review'}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
                 {isRecordings && !visibleAssets.length && (
                   <p className="no-recordings">No recordings match this search or filter.</p>
@@ -495,10 +538,15 @@ export default function App() {
       {modal === 'upload' && project && (
         <UploadDialog
           project={project}
-          onClose={() => setModal(null)}
+          initialVersionOf={uploadVersionOf}
+          onClose={() => {
+            setUploadVersionOf('');
+            setModal(null);
+          }}
           onAdded={async (a) => {
             await loadLibrary();
             selectAsset(a);
+            setUploadVersionOf('');
             setModal(null);
           }}
         />
@@ -553,6 +601,100 @@ export default function App() {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+function groupStacks(assets: Asset[]): Asset[][] {
+  const order: string[] = [];
+  const groups = new Map<string, Asset[]>();
+  for (const a of assets) {
+    const key = a.stackId || a.id;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(a);
+  }
+  return order.map((key) =>
+    groups
+      .get(key)!
+      .slice()
+      .sort((x, y) => x.version - y.version),
+  );
+}
+function VersionSwitcher({
+  versions,
+  current,
+  onSelect,
+  onAddVersion,
+}: {
+  versions: Asset[];
+  current: Asset;
+  onSelect: (a: Asset) => void;
+  onAddVersion: () => void;
+}) {
+  const index = versions.findIndex((v) => v.id === current.id);
+  const step = (delta: number) => {
+    const next = versions[index + delta];
+    if (next) onSelect(next);
+  };
+  return (
+    <div className="version-switcher" aria-label="Versions">
+      <div className="version-switcher-head">
+        <Layers size={14} />
+        <span>Versions</span>
+        <small>{versions.length}</small>
+        <div className="version-steppers">
+          <button
+            type="button"
+            aria-label="Newer version"
+            disabled={index <= 0}
+            onClick={() => step(-1)}
+          >
+            <ChevronUp size={15} />
+          </button>
+          <button
+            type="button"
+            aria-label="Older version"
+            disabled={index < 0 || index >= versions.length - 1}
+            onClick={() => step(1)}
+          >
+            <ChevronDown size={15} />
+          </button>
+        </div>
+      </div>
+      <div className="version-list" role="listbox" aria-label="Choose a version">
+        {versions.map((v) => (
+          <button
+            key={v.id}
+            type="button"
+            role="option"
+            aria-selected={v.id === current.id}
+            className={`version-chip ${v.id === current.id ? 'active' : ''}`}
+            onClick={() => onSelect(v)}
+          >
+            <span className="version-tag">V{v.version}</span>
+            <span className="version-chip-main">
+              <b>{v.title}</b>
+              <small>
+                {new Date(v.createdAt).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                })}
+                {v.openCount
+                  ? ` · ${v.openCount} open`
+                  : v.status === 'approved'
+                    ? ' · Approved'
+                    : ''}
+              </small>
+            </span>
+            {v.id === current.id && <Check size={13} />}
+          </button>
+        ))}
+      </div>
+      <button type="button" className="add-version-button" onClick={onAddVersion}>
+        <Plus size={13} /> Add new version
+      </button>
     </div>
   );
 }
@@ -697,18 +839,22 @@ function ProfileDialog({
 }
 function UploadDialog({
   project,
+  initialVersionOf = '',
   onClose,
   onAdded,
 }: {
   project: Project;
+  initialVersionOf?: string;
   onClose: () => void;
   onAdded: (a: Asset) => Promise<void>;
 }) {
+  const versionTargets = groupStacks(project.assets).map((s) => s[s.length - 1]);
   const [mode, setMode] = useState<'file' | 'path'>('file'),
     [file, setFile] = useState<File | null>(null),
     [path, setPath] = useState(''),
     [title, setTitle] = useState(''),
     [description, setDescription] = useState(''),
+    [versionOf, setVersionOf] = useState(initialVersionOf),
     [busy, setBusy] = useState(false),
     [progress, setProgress] = useState(0),
     [error, setError] = useState('');
@@ -722,13 +868,14 @@ function UploadDialog({
       if (mode === 'path')
         asset = await api<Asset>(`/projects/${project.id}/import`, {
           method: 'POST',
-          body: JSON.stringify({ path, title, description }),
+          body: JSON.stringify({ path, title, description, versionOf: versionOf || undefined }),
         });
       else {
         const data = new FormData();
         data.append('video', file!);
         data.append('title', title);
         data.append('description', description);
+        if (versionOf) data.append('versionOf', versionOf);
         asset = await new Promise<Asset>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           xhr.open('POST', `/api/projects/${project.id}/upload`);
@@ -767,6 +914,28 @@ function UploadDialog({
         <p className="subtle">
           Add a new cut to {project.name}. Existing cuts and feedback stay in place.
         </p>
+        {versionTargets.length > 0 && (
+          <label>
+            Add as
+            <select
+              aria-label="Add as a new cut or a version"
+              value={versionOf}
+              disabled={busy}
+              onChange={(e) => setVersionOf(e.target.value)}
+            >
+              <option value="">New cut (its own version stack)</option>
+              {versionTargets.map((target) => (
+                <option key={target.id} value={target.id}>
+                  New version of {target.title} (currently V{target.version})
+                </option>
+              ))}
+            </select>
+            <small>
+              A new version stacks onto an existing cut, like Frame.io. Switch between versions on
+              the player; each keeps its own comments.
+            </small>
+          </label>
+        )}
         <div className="import-tabs">
           <button
             type="button"

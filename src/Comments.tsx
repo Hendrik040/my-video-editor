@@ -10,9 +10,35 @@ import {
   Trash2,
   Clock3,
   Send,
+  ImagePlus,
+  LoaderCircle,
 } from 'lucide-react';
-import type { Asset, Comment, Drawing, Kind, Reference } from './types';
+import type { Asset, Comment, Drawing, ImageAttachment, Kind, Reference } from './types';
 import { api, parseTime, timecode } from './types';
+const MAX_IMAGES = 10;
+async function uploadImage(assetId: string, file: File): Promise<ImageAttachment> {
+  const data = new FormData();
+  data.append('image', file);
+  const response = await fetch(`/api/assets/${assetId}/images`, { method: 'POST', body: data });
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({}));
+    throw new Error(problem.error || 'That image could not be attached.');
+  }
+  const body = await response.json();
+  return { name: body.name, width: body.width, height: body.height };
+}
+function imageFilesFrom(items: DataTransferItemList | null, files: FileList | null): File[] {
+  const found: File[] = [];
+  if (items)
+    for (const item of items)
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) found.push(file);
+      }
+  if (!found.length && files)
+    for (const file of files) if (file.type.startsWith('image/')) found.push(file);
+  return found;
+}
 type Props = {
   asset: Asset;
   comments: Comment[];
@@ -64,22 +90,54 @@ export function Comments({
               title: typeof reference.title === 'string' ? reference.title : '',
             }))
         : [],
+    ),
+    [images, setImages] = useState<ImageAttachment[]>(() =>
+      Array.isArray(initial.images)
+        ? initial.images
+            .filter((image: ImageAttachment) => image && typeof image.name === 'string')
+            .slice(0, MAX_IMAGES)
+        : [],
     );
   const hasDrawing = Boolean(drawingDraft?.drawings.length);
+  const hasImages = images.length > 0;
   const [filter, setFilter] = useState('open'),
     [busy, setBusy] = useState(false),
+    [uploading, setUploading] = useState(0),
     [error, setError] = useState(''),
     [saved, setSaved] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
+  async function attachImages(files: File[]) {
+    if (!files.length) return;
+    setError('');
+    const room = MAX_IMAGES - images.length;
+    if (room <= 0) {
+      setError(`Attach at most ${MAX_IMAGES} images per note.`);
+      return;
+    }
+    setSaved(false);
+    setUploading((count) => count + 1);
+    try {
+      for (const file of files.slice(0, room)) {
+        const attachment = await uploadImage(asset.id, file);
+        if (!mounted.current) return;
+        setImages((current) => (current.length >= MAX_IMAGES ? current : [...current, attachment]));
+      }
+    } catch (e) {
+      if (mounted.current) setError((e as Error).message);
+    } finally {
+      if (mounted.current) setUploading((count) => count - 1);
+    }
+  }
   const mounted = useMounted();
   useEffect(() => {
     try {
       localStorage.setItem(
         storageKey,
-        JSON.stringify({ body, kind, start, end: range ? end : '', references }),
+        JSON.stringify({ body, kind, start, end: range ? end : '', references, images }),
       );
     } catch {}
-  }, [body, kind, start, end, range, references, storageKey]);
+  }, [body, kind, start, end, range, references, images, storageKey]);
   useEffect(() => {
     if (anchor) {
       if (!hasDrawing) {
@@ -123,6 +181,10 @@ export function Comments({
       setError('References need a full http:// or https:// link.');
       return;
     }
+    if (uploading > 0) {
+      setError('Wait for the image to finish attaching.');
+      return;
+    }
     setBusy(true);
     onSavingChange(true);
     setError('');
@@ -137,6 +199,7 @@ export function Comments({
           endTime: to,
           drawings: drawingDraft?.drawings || [],
           references: referenceAttachments,
+          images: to === null ? images : [],
         }),
       });
       try {
@@ -148,6 +211,7 @@ export function Comments({
       setRange(false);
       setEnd('');
       setReferences([]);
+      setImages([]);
       setSaved(true);
       await onRefresh();
     } catch (e) {
@@ -273,10 +337,64 @@ export function Comments({
               if (!e.repeat && !busy && body.trim()) e.currentTarget.form?.requestSubmit();
             }
           }}
+          onPaste={(e) => {
+            const files = imageFilesFrom(e.clipboardData.items, e.clipboardData.files);
+            if (files.length) {
+              e.preventDefault();
+              attachImages(files);
+            }
+          }}
         />
-        <p className="comment-shortcuts" id="comment-shortcuts">
-          Enter to post · Shift+Enter for a new line
-        </p>
+        <div className="composer-attach">
+          <p className="comment-shortcuts" id="comment-shortcuts">
+            Enter to post · Shift+Enter for a new line · paste a screenshot to attach it
+          </p>
+          <input
+            ref={imageInput}
+            className="sr-only"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            aria-label="Attach images"
+            onChange={(e) => {
+              attachImages([...(e.target.files || [])]);
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            className="attach-image-button"
+            disabled={busy || images.length >= MAX_IMAGES}
+            onClick={() => imageInput.current?.click()}
+          >
+            <ImagePlus size={13} /> Attach image
+          </button>
+        </div>
+        {(images.length > 0 || uploading > 0) && (
+          <div className="image-draft" aria-label="Attached images">
+            {images.map((image) => (
+              <div className="image-draft-item" key={image.name}>
+                <img src={`/api/attachments/${image.name}`} alt="Attached screenshot" />
+                <button
+                  type="button"
+                  aria-label="Remove image"
+                  disabled={busy}
+                  onClick={() => {
+                    setImages((current) => current.filter((item) => item.name !== image.name));
+                    setSaved(false);
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            {uploading > 0 && (
+              <div className="image-draft-item image-draft-loading">
+                <LoaderCircle size={18} className="spin" />
+              </div>
+            )}
+          </div>
+        )}
         {hasDrawing && drawingDraft && (
           <div className="drawing-note-hint">
             <p>Drawing pinned to {timecode(drawingDraft.time)}. Clear it to change the time.</p>
@@ -400,8 +518,8 @@ export function Comments({
           <label className="range-check">
             <input
               type="checkbox"
-              checked={range && !hasDrawing}
-              disabled={busy || hasDrawing}
+              checked={range && !hasDrawing && !hasImages}
+              disabled={busy || hasDrawing || hasImages}
               onChange={(e) => {
                 setRange(e.target.checked);
                 if (e.target.checked)
@@ -410,7 +528,11 @@ export function Comments({
             />
             Time range
           </label>
-          <button className="primary" disabled={!body.trim() || busy} type="submit">
+          <button
+            className="primary"
+            disabled={!body.trim() || busy || uploading > 0}
+            type="submit"
+          >
             <Send size={14} />
             {busy ? 'Saving…' : 'Post comment'}
           </button>
@@ -520,6 +642,7 @@ function CommentCard({
           </div>
         </form>
       )}
+      <ImageAttachments images={c.images} />
       <ReferenceLinks references={c.references} />
       <div className="comment-actions">
         {Boolean(c.drawings?.length) && (
@@ -548,6 +671,7 @@ function CommentCard({
           <div>
             <b>{r.author}</b>
             <p>{r.body}</p>
+            <ImageAttachments images={r.images} />
             <ReferenceLinks references={r.references} />
           </div>
           <button
@@ -634,6 +758,33 @@ function useMounted() {
   return mounted;
 }
 
+function ImageAttachments({ images }: { images?: ImageAttachment[] }) {
+  const safe = (images || []).filter((image) =>
+    /^[0-9a-f-]{36}\.(png|jpe?g|webp|gif)$/i.test(image.name),
+  );
+  if (!safe.length) return null;
+  return (
+    <div className="comment-images" aria-label="Attached images">
+      {safe.map((image) => (
+        <a
+          key={image.name}
+          href={`/api/attachments/${image.name}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="comment-image"
+        >
+          <img
+            src={`/api/attachments/${image.name}`}
+            alt="Attached screenshot"
+            loading="lazy"
+            width={image.width}
+            height={image.height}
+          />
+        </a>
+      ))}
+    </div>
+  );
+}
 function ReferenceLinks({ references }: { references?: Reference[] }) {
   const safeReferences = references?.filter((reference) => isHttpReference(reference.url)) || [];
   if (!safeReferences.length) return null;

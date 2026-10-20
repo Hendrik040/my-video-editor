@@ -4,8 +4,22 @@ import { join, extname, basename } from 'node:path';
 import { mkdirSync, existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { inspectMedia, thumbnail } from './media.mjs';
+import { inspectMedia, thumbnail, imageSize } from './media.mjs';
 import { feedbackMarkdown } from './store.mjs';
+const imageExtensions = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+};
+const attachmentName = /^[0-9a-f-]{36}\.(png|jpe?g|webp|gif)$/i;
+const attachmentType = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
 const kinds = ['note', 'keep', 'change'];
 function required(value, label, max = 5000) {
   if (typeof value !== 'string' || !value.trim() || value.length > max)
@@ -85,6 +99,11 @@ export function createApp(store) {
   });
   app.patch('/api/assets/:id', (req, res) => {
     assetFor(req.params.id);
+    if (req.body.versionOf !== undefined) {
+      if (typeof req.body.versionOf !== 'string' || !req.body.versionOf)
+        fail('Choose a cut to stack this version onto.');
+      return res.json(store.setVersionOf(req.params.id, req.body.versionOf));
+    }
     if (!['review', 'changes', 'approved'].includes(req.body.status))
       fail('Choose a valid review status.');
     store.setStatus(req.params.id, req.body.status);
@@ -120,6 +139,7 @@ export function createApp(store) {
         kind: b.kind,
         drawings: b.drawings,
         references: b.references,
+        images: b.images,
       }),
     );
   });
@@ -132,6 +152,7 @@ export function createApp(store) {
       resolved: req.body.resolved ?? Boolean(c.resolved),
       ...(req.body.drawings === undefined ? {} : { drawings: req.body.drawings }),
       ...(req.body.references === undefined ? {} : { references: req.body.references }),
+      ...(req.body.images === undefined ? {} : { images: req.body.images }),
     });
     res.json(store.comment(c.id));
   });
@@ -140,8 +161,9 @@ export function createApp(store) {
     store.deleteComment(req.params.id);
     res.status(204).end();
   });
-  async function add(projectId, file, title, description) {
+  async function add(projectId, file, title, description, versionOf) {
     if (!store.project(projectId)) fail('Project not found.', 404);
+    if (versionOf && !store.asset(versionOf)) fail('Choose a cut to version from.', 400);
     let m;
     try {
       m = await inspectMedia(file);
@@ -157,6 +179,7 @@ export function createApp(store) {
       projectId,
       title: title ? required(title, 'Title', 160) : m.title,
       description: typeof description === 'string' ? description.slice(0, 1000) : '',
+      versionOf: versionOf || null,
     });
     await thumbnail(a, store.dir).catch(() => {});
     return a;
@@ -170,6 +193,7 @@ export function createApp(store) {
           required(req.body.path, 'File path', 4000),
           req.body.title,
           req.body.description,
+          req.body.versionOf,
         ),
       );
   });
@@ -180,7 +204,7 @@ export function createApp(store) {
       destination: folder,
       filename: (_, file, cb) => cb(null, randomUUID() + extname(file.originalname).toLowerCase()),
     }),
-    limits: { fileSize: 8 * 1024 ** 3, files: 1, fields: 3 },
+    limits: { fileSize: 8 * 1024 ** 3, files: 1, fields: 4 },
     fileFilter: (_, file, cb) =>
       cb(
         null,
@@ -198,12 +222,45 @@ export function createApp(store) {
             req.file.path,
             req.body.title || basename(req.file.originalname, extname(req.file.originalname)),
             req.body.description,
+            req.body.versionOf,
           ),
         );
     } catch (error) {
       await unlink(req.file.path).catch(() => {});
       throw error;
     }
+  });
+  const attachmentsFolder = join(store.dir, 'attachments');
+  mkdirSync(attachmentsFolder, { recursive: true });
+  const imageUpload = multer({
+    storage: multer.diskStorage({
+      destination: attachmentsFolder,
+      filename: (_, file, cb) =>
+        cb(null, randomUUID() + (imageExtensions[file.mimetype] || '.png')),
+    }),
+    limits: { fileSize: 15 * 1024 * 1024, files: 1, fields: 0 },
+    fileFilter: (_, file, cb) => cb(null, Boolean(imageExtensions[file.mimetype])),
+  });
+  app.post('/api/assets/:id/images', imageUpload.single('image'), async (req, res) => {
+    if (!req.file) fail('Paste or choose a PNG, JPEG, WebP or GIF image.');
+    try {
+      assetFor(req.params.id);
+      const name = basename(req.file.path);
+      const size = await imageSize(req.file.path);
+      res.status(201).json({ name, url: `/api/attachments/${name}`, ...size });
+    } catch (error) {
+      await unlink(req.file.path).catch(() => {});
+      throw error;
+    }
+  });
+  app.get('/api/attachments/:name', (req, res) => {
+    const name = req.params.name;
+    if (!attachmentName.test(name)) fail('Image not found.', 404);
+    res.type(attachmentType[extname(name).toLowerCase()] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.sendFile(join(attachmentsFolder, name), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'Image not found.' });
+    });
   });
   app.get('/api/projects/:id/feedback', (req, res) => {
     const p = store.project(req.params.id) || fail('Project not found.', 404);

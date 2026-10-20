@@ -1,12 +1,16 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const invalidFeedback = (message) => {
   throw Object.assign(new Error(message), { status: 400 });
 };
-function commentAttachments({ drawings = [], references = [], parentId, endTime }) {
+const imageNamePattern = /^[0-9a-f-]{36}\.(png|jpe?g|webp|gif)$/i;
+function commentAttachments(
+  { drawings = [], references = [], images = [], parentId, endTime },
+  dir,
+) {
   if (!Array.isArray(drawings) || drawings.length > 40)
     invalidFeedback('Attach at most 40 drawing strokes.');
   if (drawings.length && (parentId || endTime != null))
@@ -88,7 +92,36 @@ function commentAttachments({ drawings = [], references = [], parentId, endTime 
     const title = reference.title?.trim();
     return { url: url.href, ...(title ? { title } : {}) };
   });
-  return { drawings: normalizedDrawings, references: normalizedReferences };
+  if (!Array.isArray(images) || images.length > 10) invalidFeedback('Attach at most 10 images.');
+  if (images.length && (parentId || endTime != null))
+    invalidFeedback('Images belong to a single-frame comment, not a time range or reply.');
+  const dimension = (value) => {
+    if (value === undefined) return undefined;
+    if (!Number.isInteger(value) || value < 1 || value > 20000)
+      invalidFeedback('Image dimensions must be whole numbers from 1 to 20000.');
+    return value;
+  };
+  const normalizedImages = images.map((image) => {
+    if (
+      !image ||
+      typeof image !== 'object' ||
+      Array.isArray(image) ||
+      typeof image.name !== 'string' ||
+      !imageNamePattern.test(image.name)
+    )
+      invalidFeedback('Each image needs a valid uploaded attachment name.');
+    const name = image.name.toLowerCase();
+    if (dir && !existsSync(join(dir, 'attachments', name)))
+      invalidFeedback('An attached image was not uploaded to this studio.');
+    const width = dimension(image.width);
+    const height = dimension(image.height);
+    return { name, ...(width ? { width } : {}), ...(height ? { height } : {}) };
+  });
+  return {
+    drawings: normalizedDrawings,
+    references: normalizedReferences,
+    images: normalizedImages,
+  };
 }
 const decodeComment = (comment) =>
   comment && {
@@ -96,6 +129,7 @@ const decodeComment = (comment) =>
     resolved: Boolean(comment.resolved),
     drawings: JSON.parse(comment.drawings),
     references: JSON.parse(comment.references),
+    images: JSON.parse(comment.images || '[]'),
   };
 
 export function createStore(directory) {
@@ -119,6 +153,20 @@ export function createStore(directory) {
   for (const name of ['sourceIn', 'sourceOut']) {
     if (!columns.has(name)) db.exec(`ALTER TABLE assets ADD COLUMN ${name} REAL`);
   }
+  let migratedAssets = false;
+  if (!columns.has('stackId')) {
+    db.exec('ALTER TABLE assets ADD COLUMN stackId TEXT');
+    migratedAssets = true;
+  }
+  if (!columns.has('version')) {
+    db.exec('ALTER TABLE assets ADD COLUMN version INTEGER');
+    migratedAssets = true;
+  }
+  if (migratedAssets) {
+    db.exec("UPDATE assets SET stackId=id WHERE stackId IS NULL OR stackId=''");
+    db.exec('UPDATE assets SET version=1 WHERE version IS NULL');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS assets_stack ON assets(stackId, version)');
   const commentColumns = new Set(
     db
       .prepare('PRAGMA table_info(comments)')
@@ -126,7 +174,7 @@ export function createStore(directory) {
       .map((column) => column.name),
   );
   let migratedComments = false;
-  for (const name of ['drawings', 'references']) {
+  for (const name of ['drawings', 'references', 'images']) {
     if (!commentColumns.has(name)) {
       db.exec(`ALTER TABLE comments ADD COLUMN "${name}" TEXT NOT NULL DEFAULT '[]'`);
       migratedComments = true;
@@ -172,7 +220,7 @@ export function createStore(directory) {
       throw error;
     }
   };
-  if (migratedComments) snapshot();
+  if (migratedComments || migratedAssets) snapshot();
   return {
     db,
     dir,
@@ -211,8 +259,22 @@ export function createStore(directory) {
           createdAt: new Date().toISOString(),
           status: 'review',
         };
+        let stackId = asset.id;
+        let version = 1;
+        if (a.versionOf) {
+          const base = get('SELECT * FROM assets WHERE id=?', a.versionOf);
+          if (!base || base.projectId !== asset.projectId)
+            throw Object.assign(new Error('Add a new version to a cut in the same project.'), {
+              status: 400,
+            });
+          stackId = base.stackId || base.id;
+          version =
+            (get('SELECT MAX(version) AS m FROM assets WHERE stackId=?', stackId)?.m || 0) + 1;
+        }
+        asset.stackId = stackId;
+        asset.version = version;
         db.prepare(
-          'INSERT INTO assets (id,projectId,title,description,path,duration,width,height,fps,status,createdAt,sourcePath,cameraProxyPath,sourceIn,sourceOut) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO assets (id,projectId,title,description,path,duration,width,height,fps,status,createdAt,sourcePath,cameraProxyPath,sourceIn,sourceOut,stackId,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         ).run(
           asset.id,
           asset.projectId,
@@ -229,18 +291,52 @@ export function createStore(directory) {
           asset.cameraProxyPath ?? null,
           asset.sourceIn ?? null,
           asset.sourceOut ?? null,
+          asset.stackId,
+          asset.version,
         );
         return asset;
       }),
     setStatus: (id, status) =>
       mutate(() => db.prepare('UPDATE assets SET status=? WHERE id=?').run(status, id)),
+    setVersionOf: (id, versionOfId) =>
+      mutate(() => {
+        const asset = get('SELECT * FROM assets WHERE id=?', id);
+        if (!asset) throw Object.assign(new Error('Video not found.'), { status: 404 });
+        const base = get('SELECT * FROM assets WHERE id=?', versionOfId);
+        if (!base)
+          throw Object.assign(new Error('Choose a cut to stack this onto.'), { status: 400 });
+        if (base.projectId !== asset.projectId)
+          throw Object.assign(new Error('Stack versions within the same project.'), {
+            status: 400,
+          });
+        const targetStack = base.stackId || base.id;
+        if (targetStack === (asset.stackId || asset.id))
+          return get('SELECT * FROM assets WHERE id=?', id);
+        if (targetStack === asset.id)
+          throw Object.assign(new Error('A cut cannot be a version of itself.'), { status: 400 });
+        const next =
+          (get('SELECT MAX(version) AS m FROM assets WHERE stackId=?', targetStack)?.m || 0) + 1;
+        // Re-parent this cut and any versions currently sharing its stack onto the target stack.
+        const members = all(
+          'SELECT id FROM assets WHERE stackId=? ORDER BY version ASC, rowid ASC',
+          asset.stackId || asset.id,
+        );
+        members.forEach((member, index) => {
+          db.prepare('UPDATE assets SET stackId=?, version=? WHERE id=?').run(
+            targetStack,
+            next + index,
+            member.id,
+          );
+        });
+        return get('SELECT * FROM assets WHERE id=?', id);
+      }),
     addComment: (c) => {
-      const attachments = commentAttachments(c);
+      const attachments = commentAttachments(c, dir);
       return mutate(() => {
         const id = randomUUID(),
           now = new Date().toISOString();
         db.prepare(
-          'INSERT INTO comments (id,assetId,parentId,author,body,time,endTime,kind,resolved,createdAt,updatedAt,drawings,"references") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO comments (id,assetId,parentId,author,body,time,endTime,kind,resolved,createdAt,updatedAt,drawings,"references",images) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         ).run(
           id,
           c.assetId,
@@ -255,6 +351,7 @@ export function createStore(directory) {
           now,
           JSON.stringify(attachments.drawings),
           JSON.stringify(attachments.references),
+          JSON.stringify(attachments.images),
         );
         return comment(id);
       });
@@ -262,15 +359,19 @@ export function createStore(directory) {
     updateComment: (id, c) => {
       const previous = comment(id);
       if (!previous) throw Object.assign(new Error('Comment not found.'), { status: 404 });
-      const attachments = commentAttachments({
-        ...previous,
-        drawings: c.drawings === undefined ? previous.drawings : c.drawings,
-        references: c.references === undefined ? previous.references : c.references,
-      });
+      const attachments = commentAttachments(
+        {
+          ...previous,
+          drawings: c.drawings === undefined ? previous.drawings : c.drawings,
+          references: c.references === undefined ? previous.references : c.references,
+          images: c.images === undefined ? previous.images : c.images,
+        },
+        dir,
+      );
       return mutate(() =>
         db
           .prepare(
-            'UPDATE comments SET body=?, resolved=?, updatedAt=?, drawings=?, "references"=? WHERE id=?',
+            'UPDATE comments SET body=?, resolved=?, updatedAt=?, drawings=?, "references"=?, images=? WHERE id=?',
           )
           .run(
             c.body ?? previous.body,
@@ -278,6 +379,7 @@ export function createStore(directory) {
             new Date().toISOString(),
             JSON.stringify(attachments.drawings),
             JSON.stringify(attachments.references),
+            JSON.stringify(attachments.images),
             id,
           ),
       );
@@ -304,6 +406,12 @@ function attachmentMarkdown(comment, indent) {
       .replace(/[\\[\]]/g, '\\$&');
     const url = reference.url.replaceAll('<', '%3C').replaceAll('>', '%3E');
     lines.push(`${indent}Reference: [${title}](<${url}>)`);
+  }
+  for (const image of comment.images || []) {
+    const size = image.width && image.height ? ` (${image.width}×${image.height})` : '';
+    lines.push(
+      `${indent}Image${size}: ![pasted image](<http://127.0.0.1:4317/api/attachments/${image.name}>)`,
+    );
   }
   if (comment.drawings.length)
     lines.push(

@@ -32,6 +32,29 @@ export async function inspectMedia(path) {
     fps: den ? num / den : 30,
   };
 }
+export async function imageSize(path) {
+  try {
+    const { stdout } = await exec(
+      'ffprobe',
+      [
+        '-v',
+        'error',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'stream=width,height',
+        '-of',
+        'json',
+        path,
+      ],
+      { timeout: 15000, maxBuffer: 1024 * 1024 },
+    );
+    const stream = JSON.parse(stdout).streams?.[0];
+    if (stream && Number.isInteger(stream.width) && Number.isInteger(stream.height))
+      return { width: stream.width, height: stream.height };
+  } catch {}
+  return {};
+}
 export async function thumbnail(asset, directory) {
   const folder = join(directory, 'thumbnails');
   await mkdir(folder, { recursive: true });

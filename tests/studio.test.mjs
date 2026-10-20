@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { request as httpRequest } from 'node:http';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore, feedbackMarkdown } from '../server/store.mjs';
@@ -485,6 +486,142 @@ test('API validates feedback, isolates cuts, persists mutations, exports and str
   } finally {
     await new Promise((r) => server.close(r));
     store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('version stacks group cuts, number versions and reject cross-project stacking', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cutroom-versions-'));
+  const store = createStore(dir);
+  try {
+    const project = store.addProject({ name: 'Secure update' });
+    const base = {
+      projectId: project.id,
+      path: join(dir, 'a.mp4'),
+      duration: 60,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+    };
+    const v1 = store.addAsset({ ...base, title: 'Cut' });
+    assert.equal(v1.stackId, v1.id);
+    assert.equal(v1.version, 1);
+    const v2 = store.addAsset({ ...base, title: 'Cut revised', versionOf: v1.id });
+    assert.equal(v2.stackId, v1.id);
+    assert.equal(v2.version, 2);
+    const solo = store.addAsset({ ...base, title: 'Unrelated cut' });
+    assert.equal(solo.stackId, solo.id);
+    // Re-parent an existing standalone cut onto the stack.
+    const moved = store.setVersionOf(solo.id, v1.id);
+    assert.equal(moved.stackId, v1.id);
+    assert.equal(moved.version, 3);
+    // Stacking is idempotent once a cut already belongs to the stack.
+    assert.equal(store.setVersionOf(solo.id, v2.id).version, 3);
+    const stacked = store
+      .library()
+      .find((p) => p.id === project.id)
+      .assets.filter((a) => a.stackId === v1.id)
+      .map((a) => a.version)
+      .sort();
+    assert.deepEqual(stacked, [1, 2, 3]);
+    // A version cannot belong to a different project's stack.
+    const other = store.addProject({ name: 'Other' });
+    const otherAsset = store.addAsset({ ...base, projectId: other.id, title: 'Elsewhere' });
+    assert.throws(() => store.setVersionOf(otherAsset.id, v1.id), /same project/);
+    assert.throws(
+      () => store.addAsset({ ...base, projectId: other.id, title: 'Bad', versionOf: v1.id }),
+      /same project/,
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pasted image attachments persist, validate and export', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cutroom-images-'));
+  const store = createStore(dir);
+  try {
+    const project = store.addProject({ name: 'Screens' });
+    const asset = store.addAsset({
+      projectId: project.id,
+      title: 'Cut',
+      path: join(dir, 'a.mp4'),
+      duration: 60,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+    });
+    const name = `${randomUUID()}.png`;
+    mkdirSync(join(dir, 'attachments'), { recursive: true });
+    writeFileSync(join(dir, 'attachments', name), 'not-a-real-image');
+    const comment = store.addComment({
+      assetId: asset.id,
+      author: 'Reviewer',
+      body: 'See the misaligned header.',
+      time: 3,
+      kind: 'change',
+      images: [{ name, width: 1280, height: 720 }],
+    });
+    assert.deepEqual(store.comment(comment.id).images, [{ name, width: 1280, height: 720 }]);
+    // Reopening keeps the attachment.
+    store.close();
+    const reopened = createStore(dir);
+    assert.deepEqual(reopened.comment(comment.id).images, [{ name, width: 1280, height: 720 }]);
+    const md = feedbackMarkdown(reopened, project.id);
+    assert.match(md, new RegExp(`/api/attachments/${name}`));
+    // Rejections: unknown file, bad name, range + image, too many.
+    assert.throws(
+      () =>
+        reopened.addComment({
+          assetId: asset.id,
+          author: 'R',
+          body: 'x',
+          time: 1,
+          kind: 'note',
+          images: [{ name: `${randomUUID()}.png` }],
+        }),
+      /was not uploaded/,
+    );
+    assert.throws(
+      () =>
+        reopened.addComment({
+          assetId: asset.id,
+          author: 'R',
+          body: 'x',
+          time: 1,
+          kind: 'note',
+          images: [{ name: '../secret.png' }],
+        }),
+      /valid uploaded attachment/,
+    );
+    assert.throws(
+      () =>
+        reopened.addComment({
+          assetId: asset.id,
+          author: 'R',
+          body: 'x',
+          time: 1,
+          endTime: 2,
+          kind: 'note',
+          images: [{ name }],
+        }),
+      /single-frame/,
+    );
+    assert.throws(
+      () =>
+        reopened.addComment({
+          assetId: asset.id,
+          author: 'R',
+          body: 'x',
+          time: 1,
+          kind: 'note',
+          images: Array.from({ length: 11 }, () => ({ name })),
+        }),
+      /at most 10 images/,
+    );
+    reopened.close();
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
