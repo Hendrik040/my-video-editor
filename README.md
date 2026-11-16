@@ -63,11 +63,11 @@ Everything persistent is in `data/`, excluded from Git:
 - `media/`: uploaded video copies; `thumbnails/`: generated previews.
 - `studio.log`: launcher logs.
 
-The source repo deliberately contains no videos, comments, local paths or credentials. Back up the entire `data/` folder while the app is stopped, plus any externally linked videos. The private repository backs up code, not review data.
+The source repo deliberately contains no videos, comments, local paths or credentials. Back up the entire `data/` folder while the app is stopped, plus any externally linked videos. The GitHub repository backs up code, not review data.
 
 ## Scope and privacy
 
-This is a single-user studio bound to `127.0.0.1`. It persists across browser restarts, has local timecoded links, and rejects cross-origin mutations. It does not expose a public review link, synchronize between computers, or provide cloud accounts. The running app is independent from the private GitHub repository. Do not expose this server through a public tunnel without adding authentication and a storage/deployment plan.
+This is a single-user studio bound to `127.0.0.1`. It persists across browser restarts, has local timecoded links, and rejects cross-origin mutations. It does not expose a public review link, synchronize between computers, or provide cloud accounts. The running app is independent from the GitHub repository. Do not expose this server through a public tunnel without adding authentication and a storage/deployment plan.
 
 To stop it, find the process with `lsof -iTCP:4317 -sTCP:LISTEN`, then terminate that Node process; opening the launcher starts it again. `PORT` and `STUDIO_DATA_DIR` can override the defaults. No background login item is installed.
 
